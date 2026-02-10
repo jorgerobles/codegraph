@@ -1,6 +1,6 @@
 {
   "name": "@colbymchenry/codegraph",
-  "version": "0.4.5",
+  "version": "0.4.7",
   "description": "Supercharge Claude Code with semantic code intelligence. 30% fewer tokens, 25% fewer tool calls, 100% local.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -37,7 +37,7 @@
     "better-sqlite3": "^11.0.0",
     "commander": "^14.0.2",
     "figlet": "^1.8.0",
-    "tree-sitter": "0.21.1"
+    "tree-sitter": "0.22.4"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
@@ -67,6 +67,6 @@
     "node": ">=18.0.0"
   },
   "overrides": {
-    "tree-sitter": "0.21.1"
+    "tree-sitter": "0.22.4"
   }
 }
