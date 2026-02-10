@@ -259,7 +259,21 @@ export class ToolHandler {
   // Cache of opened CodeGraph instances for cross-project queries
   private projectCache: Map<string, CodeGraph> = new Map();
 
-  constructor(private cg: CodeGraph) {}
+  constructor(private cg: CodeGraph | null) {}
+
+  /**
+   * Update the default CodeGraph instance (e.g. after lazy initialization)
+   */
+  setDefaultCodeGraph(cg: CodeGraph): void {
+    this.cg = cg;
+  }
+
+  /**
+   * Whether a default CodeGraph instance is available
+   */
+  hasDefaultCodeGraph(): boolean {
+    return this.cg !== null;
+  }
 
   /**
    * Get CodeGraph instance for a project
@@ -272,6 +286,9 @@ export class ToolHandler {
    */
   private getCodeGraph(projectPath?: string): CodeGraph {
     if (!projectPath) {
+      if (!this.cg) {
+        throw new Error('CodeGraph not initialized for this project. Run \'codegraph init\' first.');
+      }
       return this.cg;
     }
 
