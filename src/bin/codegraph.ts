@@ -8,6 +8,7 @@
  *   codegraph                    Run interactive installer (when no args)
  *   codegraph install            Run interactive installer
  *   codegraph init [path]        Initialize CodeGraph in a project
+ *   codegraph uninit [path]      Remove CodeGraph from a project
  *   codegraph index [path]       Index all files in the project
  *   codegraph sync [path]        Sync changes since last index
  *   codegraph status [path]      Show index status
@@ -276,6 +277,51 @@ program
     } catch (err) {
       captureException(err);
       error(`Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * codegraph uninit [path]
+ */
+program
+  .command('uninit [path]')
+  .description('Remove CodeGraph from a project (deletes .codegraph/ directory)')
+  .option('-f, --force', 'Skip confirmation prompt')
+  .action(async (pathArg: string | undefined, options: { force?: boolean }) => {
+    const projectPath = resolveProjectPath(pathArg);
+
+    try {
+      if (!CodeGraph.isInitialized(projectPath)) {
+        warn(`CodeGraph is not initialized in ${projectPath}`);
+        return;
+      }
+
+      if (!options.force) {
+        // Confirm with user
+        const readline = await import('readline');
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question(
+            chalk.yellow('⚠ This will permanently delete all CodeGraph data. Continue? (y/N) '),
+            resolve
+          );
+        });
+        rl.close();
+
+        if (answer.toLowerCase() !== 'y') {
+          info('Cancelled');
+          return;
+        }
+      }
+
+      const cg = CodeGraph.openSync(projectPath);
+      cg.uninitialize();
+
+      success(`Removed CodeGraph from ${projectPath}`);
+    } catch (err) {
+      captureException(err);
+      error(`Failed to uninitialize: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
