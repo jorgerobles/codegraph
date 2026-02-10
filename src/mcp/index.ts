@@ -15,12 +15,32 @@
  * ```
  */
 
+import * as path from 'path';
 import CodeGraph, { findNearestCodeGraphRoot } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
 import { tools, ToolHandler } from './tools';
 import { initSentry, captureException } from '../sentry';
 
 initSentry({ processName: 'codegraph-mcp' });
+
+/**
+ * Convert a file:// URI to a filesystem path.
+ * Handles URL encoding and Windows drive letter paths.
+ */
+function fileUriToPath(uri: string): string {
+  try {
+    const url = new URL(uri);
+    let filePath = decodeURIComponent(url.pathname);
+    // On Windows, file:///C:/path produces pathname /C:/path — strip leading /
+    if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
+      filePath = filePath.slice(1);
+    }
+    return path.resolve(filePath);
+  } catch {
+    // Fallback for non-standard URIs
+    return uri.replace(/^file:\/\/\/?/, '');
+  }
+}
 
 /**
  * MCP Server Info
@@ -44,13 +64,14 @@ const PROTOCOL_VERSION = '2024-11-05';
 export class MCPServer {
   private transport: StdioTransport;
   private cg: CodeGraph | null = null;
-  private toolHandler: ToolHandler | null = null;
+  private toolHandler: ToolHandler;
   private projectPath: string | null;
-  private initError: string | null = null;
 
   constructor(projectPath?: string) {
     this.projectPath = projectPath || null;
     this.transport = new StdioTransport();
+    // Create ToolHandler eagerly — cross-project queries work even without a default project
+    this.toolHandler = new ToolHandler(null);
   }
 
   /**
@@ -70,18 +91,21 @@ export class MCPServer {
   }
 
   /**
-   * Initialize CodeGraph for the project
+   * Try to initialize CodeGraph for the default project.
    *
    * Walks up parent directories to find the nearest .codegraph/ folder,
    * similar to how git finds .git/ directories.
+   *
+   * If initialization fails, the error is recorded but the server continues
+   * to work — cross-project queries and retries on subsequent tool calls
+   * are still possible.
    */
-  private async initializeCodeGraph(projectPath: string): Promise<void> {
+  private async tryInitializeDefault(projectPath: string): Promise<void> {
     // Walk up parent directories to find nearest .codegraph/
     const resolvedRoot = findNearestCodeGraphRoot(projectPath);
 
     if (!resolvedRoot) {
       this.projectPath = projectPath;
-      this.initError = `CodeGraph not initialized in ${projectPath}. Run 'codegraph init' first.`;
       return;
     }
 
@@ -89,11 +113,31 @@ export class MCPServer {
 
     try {
       this.cg = await CodeGraph.open(resolvedRoot);
-      this.toolHandler = new ToolHandler(this.cg);
-      this.initError = null;
+      this.toolHandler.setDefaultCodeGraph(this.cg);
     } catch (err) {
       captureException(err);
-      this.initError = `Failed to open CodeGraph: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * Retry initialization of the default project if it previously failed.
+   * Called lazily on tool calls that need the default project.
+   */
+  private retryInitIfNeeded(): void {
+    // Already initialized successfully
+    if (this.toolHandler.hasDefaultCodeGraph()) return;
+    // No project path to retry with
+    if (!this.projectPath) return;
+
+    const resolvedRoot = findNearestCodeGraphRoot(this.projectPath);
+    if (!resolvedRoot) return;
+
+    try {
+      this.cg = CodeGraph.openSync(resolvedRoot);
+      this.projectPath = resolvedRoot;
+      this.toolHandler.setDefaultCodeGraph(this.cg);
+    } catch {
+      // Still failing — will retry on next tool call
     }
   }
 
@@ -102,9 +146,7 @@ export class MCPServer {
    */
   stop(): void {
     // Close all cached cross-project connections first
-    if (this.toolHandler) {
-      this.toolHandler.closeAll();
-    }
+    this.toolHandler.closeAll();
     // Close the main CodeGraph instance
     if (this.cg) {
       this.cg.close();
@@ -175,10 +217,9 @@ export class MCPServer {
     let projectPath = this.projectPath;
 
     if (params?.rootUri) {
-      // Convert file:// URI to path
-      projectPath = params.rootUri.replace(/^file:\/\//, '');
+      projectPath = fileUriToPath(params.rootUri);
     } else if (params?.workspaceFolders?.[0]?.uri) {
-      projectPath = params.workspaceFolders[0].uri.replace(/^file:\/\//, '');
+      projectPath = fileUriToPath(params.workspaceFolders[0].uri);
     }
 
     // Fall back to current working directory if no path provided
@@ -186,8 +227,8 @@ export class MCPServer {
       projectPath = process.cwd();
     }
 
-    // Initialize CodeGraph if we have a project path
-    await this.initializeCodeGraph(projectPath);
+    // Try to initialize the default project (non-fatal if it fails)
+    await this.tryInitializeDefault(projectPath);
 
     // We accept the client's protocol version but respond with our supported version
     this.transport.sendResult(request.id, {
@@ -240,19 +281,9 @@ export class MCPServer {
       return;
     }
 
-    // Execute the tool
-    if (!this.toolHandler) {
-      const errorMsg = this.initError ||
-        (this.projectPath
-          ? `CodeGraph not initialized in ${this.projectPath}. Run 'codegraph init' first.`
-          : 'No project path provided. Ensure Claude Code is running in a project directory.');
-      this.transport.sendError(
-        request.id,
-        ErrorCodes.InternalError,
-        errorMsg
-      );
-      return;
-    }
+    // If the default project isn't initialized yet, retry in case it was
+    // initialized after the MCP server started (e.g. user ran codegraph init)
+    this.retryInitIfNeeded();
 
     const result = await this.toolHandler.execute(toolName, toolArgs);
 
