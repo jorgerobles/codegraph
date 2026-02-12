@@ -536,8 +536,6 @@ export const DEFAULT_CONFIG: CodeGraphConfig = {
     '**/node_modules/**',
     '**/vendor/**',
     '**/Pods/**',
-    '**/_libs/**',
-    '**/libs/**',
 
     // Generic build outputs
     '**/dist/**',
