@@ -18,7 +18,7 @@ import {
 } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
-import { detectLanguage, isLanguageSupported } from './grammars';
+import { detectLanguage, isLanguageSupported, initGrammars } from './grammars';
 import { logDebug, logWarn } from '../errors';
 import { captureException } from '../sentry';
 import { validatePathWithinRoot, normalizePath } from '../utils';
@@ -342,6 +342,7 @@ export class ExtractionOrchestrator {
     onProgress?: (progress: IndexProgress) => void,
     signal?: AbortSignal
   ): Promise<IndexResult> {
+    await initGrammars();
     const startTime = Date.now();
     const errors: ExtractionError[] = [];
     let filesIndexed = 0;
@@ -682,6 +683,7 @@ export class ExtractionOrchestrator {
    * Uses git status as a fast path when available, falling back to full scan.
    */
   async sync(onProgress?: (progress: IndexProgress) => void): Promise<SyncResult> {
+    await initGrammars();
     const startTime = Date.now();
     let filesChecked = 0;
     let filesAdded = 0;
@@ -918,4 +920,4 @@ export class ExtractionOrchestrator {
 
 // Re-export useful types and functions
 export { extractFromSource } from './tree-sitter';
-export { detectLanguage, isLanguageSupported, getSupportedLanguages } from './grammars';
+export { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars } from './grammars';

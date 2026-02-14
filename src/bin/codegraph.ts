@@ -26,10 +26,24 @@ import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
-import CodeGraph, { getCodeGraphDir, findNearestCodeGraphRoot } from '../index';
-import type { IndexProgress } from '../index';
-import { runInstaller } from '../installer';
+import { getCodeGraphDir, findNearestCodeGraphRoot, isInitialized } from '../directory';
 import { initSentry, captureException } from '../sentry';
+
+// Lazy-load heavy modules (CodeGraph, runInstaller) to keep CLI startup fast.
+async function loadCodeGraph(): Promise<typeof import('../index')> {
+  try {
+    return await import('../index');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('\x1b[31m✗\x1b[0m Failed to load CodeGraph modules.');
+    console.error(`\n  Node: ${process.version}  Platform: ${process.platform} ${process.arch}`);
+    console.error(`\n  Error: ${msg}`);
+    console.error('\n  Try reinstalling with: npm install -g @colbymchenry/codegraph\n');
+    process.exit(1);
+  }
+}
+
+type IndexProgress = import('../index').IndexProgress;
 
 // Check if running with no arguments - run installer
 // Read version for Sentry release tag
@@ -41,9 +55,11 @@ const pkgVersion = (() => {
 initSentry({ processName: 'codegraph-cli', version: pkgVersion });
 
 if (process.argv.length === 2) {
-  runInstaller().catch((err) => {
+  import('../installer').then(({ runInstaller }) =>
+    runInstaller()
+  ).catch((err) => {
     captureException(err);
-    console.error('Installation failed:', err.message);
+    console.error('Installation failed:', err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
 } else {
@@ -117,7 +133,7 @@ function resolveProjectPath(pathArg?: string): string {
   const absolutePath = path.resolve(pathArg || process.cwd());
 
   // If exact path is initialized (has codegraph.db), use it
-  if (CodeGraph.isInitialized(absolutePath)) {
+  if (isInitialized(absolutePath)) {
     return absolutePath;
   }
 
@@ -131,7 +147,7 @@ function resolveProjectPath(pathArg?: string): string {
     if (parent === current) break;
     current = parent;
 
-    if (CodeGraph.isInitialized(current)) {
+    if (isInitialized(current)) {
       return current;
     }
   }
@@ -240,13 +256,14 @@ program
 
     try {
       // Check if already initialized
-      if (CodeGraph.isInitialized(projectPath)) {
+      if (isInitialized(projectPath)) {
         warn(`CodeGraph already initialized in ${projectPath}`);
         info('Use "codegraph index" to re-index or "codegraph sync" to update');
         return;
       }
 
       // Initialize
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.init(projectPath, {
         index: false, // We'll handle indexing ourselves for progress
       });
@@ -295,7 +312,7 @@ program
     const projectPath = resolveProjectPath(pathArg);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         warn(`CodeGraph is not initialized in ${projectPath}`);
         return;
       }
@@ -318,6 +335,7 @@ program
         }
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = CodeGraph.openSync(projectPath);
       cg.uninitialize();
 
@@ -341,12 +359,13 @@ program
     const projectPath = resolveProjectPath(pathArg);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         error(`CodeGraph not initialized in ${projectPath}`);
         info('Run "codegraph init" first');
         process.exit(1);
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
       if (!options.quiet) {
@@ -408,13 +427,14 @@ program
     const projectPath = resolveProjectPath(pathArg);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         if (!options.quiet) {
           error(`CodeGraph not initialized in ${projectPath}`);
         }
         process.exit(1);
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
       const result = await cg.sync({
@@ -467,7 +487,7 @@ program
     const projectPath = resolveProjectPath(pathArg);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         if (options.json) {
           console.log(JSON.stringify({ initialized: false, projectPath }));
           return;
@@ -479,6 +499,7 @@ program
         return;
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
       const stats = cg.getStats();
       const changes = cg.getChangedFiles();
@@ -579,11 +600,12 @@ program
     const projectPath = resolveProjectPath(options.path);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         error(`CodeGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
       const limit = parseInt(options.limit || '10', 10);
@@ -652,11 +674,12 @@ program
     const projectPath = resolveProjectPath(options.path);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         error(`CodeGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
       let files = cg.getFiles();
 
@@ -854,11 +877,12 @@ program
     const projectPath = resolveProjectPath(options.path);
 
     try {
-      if (!CodeGraph.isInitialized(projectPath)) {
+      if (!isInitialized(projectPath)) {
         error(`CodeGraph not initialized in ${projectPath}`);
         process.exit(1);
       }
 
+      const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
       const context = await cg.buildContext(task, {
@@ -987,7 +1011,7 @@ program
       try { fs.unlinkSync(dirtyPath); } catch { /* ignore */ }
 
       // If not fully initialized (no DB), exit
-      if (!CodeGraph.isInitialized(projectRoot!)) {
+      if (!isInitialized(projectRoot!)) {
         process.exit(0);
       }
 
@@ -1018,6 +1042,7 @@ program
   .command('install')
   .description('Run interactive installer for Claude Code integration')
   .action(async () => {
+    const { runInstaller } = await import('../installer');
     await runInstaller();
   });
 

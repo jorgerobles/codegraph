@@ -4,7 +4,7 @@
  * Prepared statements for CRUD operations on the knowledge graph.
  */
 
-import Database from 'better-sqlite3';
+import { SqliteDatabase, SqliteStatement } from './sqlite-adapter';
 import {
   Node,
   Edge,
@@ -143,7 +143,7 @@ function rowToFileRecord(row: FileRow): FileRecord {
  * Query builder for the knowledge graph database
  */
 export class QueryBuilder {
-  private db: Database.Database;
+  private db: SqliteDatabase;
 
   // Node cache for frequently accessed nodes (LRU-style, max 1000 entries)
   private nodeCache: Map<string, Node> = new Map();
@@ -151,30 +151,30 @@ export class QueryBuilder {
 
   // Prepared statements (lazily initialized)
   private stmts: {
-    insertNode?: Database.Statement;
-    updateNode?: Database.Statement;
-    deleteNode?: Database.Statement;
-    deleteNodesByFile?: Database.Statement;
-    getNodeById?: Database.Statement;
-    getNodesByFile?: Database.Statement;
-    getNodesByKind?: Database.Statement;
-    insertEdge?: Database.Statement;
-    upsertFile?: Database.Statement;
-    deleteEdgesBySource?: Database.Statement;
-    deleteEdgesByTarget?: Database.Statement;
-    getEdgesBySource?: Database.Statement;
-    getEdgesByTarget?: Database.Statement;
-    insertFile?: Database.Statement;
-    updateFile?: Database.Statement;
-    deleteFile?: Database.Statement;
-    getFileByPath?: Database.Statement;
-    getAllFiles?: Database.Statement;
-    insertUnresolved?: Database.Statement;
-    deleteUnresolvedByNode?: Database.Statement;
-    getUnresolvedByName?: Database.Statement;
+    insertNode?: SqliteStatement;
+    updateNode?: SqliteStatement;
+    deleteNode?: SqliteStatement;
+    deleteNodesByFile?: SqliteStatement;
+    getNodeById?: SqliteStatement;
+    getNodesByFile?: SqliteStatement;
+    getNodesByKind?: SqliteStatement;
+    insertEdge?: SqliteStatement;
+    upsertFile?: SqliteStatement;
+    deleteEdgesBySource?: SqliteStatement;
+    deleteEdgesByTarget?: SqliteStatement;
+    getEdgesBySource?: SqliteStatement;
+    getEdgesByTarget?: SqliteStatement;
+    insertFile?: SqliteStatement;
+    updateFile?: SqliteStatement;
+    deleteFile?: SqliteStatement;
+    getFileByPath?: SqliteStatement;
+    getAllFiles?: SqliteStatement;
+    insertUnresolved?: SqliteStatement;
+    deleteUnresolvedByNode?: SqliteStatement;
+    getUnresolvedByName?: SqliteStatement;
   } = {};
 
-  constructor(db: Database.Database) {
+  constructor(db: SqliteDatabase) {
     this.db = db;
   }
 

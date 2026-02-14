@@ -105,7 +105,7 @@ function resolveRelativeImport(
 
   // Try the path as-is first
   const basePath = path.resolve(fromDir, importPath);
-  const relativePath = path.relative(projectRoot, basePath);
+  const relativePath = path.relative(projectRoot, basePath).replace(/\\/g, '/');
 
   // Try each extension
   for (const ext of extensions) {

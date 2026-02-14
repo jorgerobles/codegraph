@@ -38,6 +38,7 @@ import {
   IndexResult,
   SyncResult,
   extractFromSource,
+  initGrammars,
 } from './extraction';
 import {
   ReferenceResolver,
@@ -60,7 +61,7 @@ export {
   CODEGRAPH_DIR,
 } from './directory';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
-export { detectLanguage, isLanguageSupported, getSupportedLanguages } from './extraction';
+export { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars } from './extraction';
 export { ResolutionResult } from './resolution';
 export { EmbeddingProgress } from './vectors';
 export {
@@ -184,6 +185,7 @@ export class CodeGraph {
    * @returns A new CodeGraph instance
    */
   static async init(projectRoot: string, options: InitOptions = {}): Promise<CodeGraph> {
+    await initGrammars();
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if already initialized
@@ -253,6 +255,7 @@ export class CodeGraph {
    * @returns A CodeGraph instance
    */
   static async open(projectRoot: string, options: OpenOptions = {}): Promise<CodeGraph> {
+    await initGrammars();
     const resolvedRoot = path.resolve(projectRoot);
 
     // Check if initialized
