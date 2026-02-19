@@ -1015,17 +1015,17 @@ program
         process.exit(0);
       }
 
-      // Spawn `codegraph sync` as a detached background process
-      // so this hook exits immediately and doesn't block Claude Code
-      const isWindows = process.platform === 'win32';
+      // Spawn sync as a detached background process
+      // so this hook exits immediately and doesn't block Claude Code.
+      // Uses process.argv[0]/[1] (e.g. node /path/to/codegraph.js) so it
+      // works whether invoked via global install, npx, or directly.
       const child = spawn(
-        isWindows ? 'codegraph' : process.argv[0]!,
-        isWindows ? ['sync', '--quiet', projectRoot!] : [process.argv[1]!, 'sync', '--quiet', projectRoot!],
+        process.argv[0]!,
+        [process.argv[1]!, 'sync', '--quiet', projectRoot!],
         {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
-          shell: isWindows,
         }
       );
       child.unref();

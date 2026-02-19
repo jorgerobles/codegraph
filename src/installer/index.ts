@@ -5,10 +5,9 @@
  * with Claude Code.
  */
 
-import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
 import { promptInstallLocation, promptAutoAllow, InstallLocation } from './prompts';
-import { writeMcpConfig, writePermissions, writeClaudeMd, writeHooks, hasMcpConfig, hasPermissions, hasHooks, setUseNpxFallback } from './config-writer';
+import { writeMcpConfig, writePermissions, writeClaudeMd, writeHooks, hasMcpConfig, hasPermissions, hasHooks } from './config-writer';
 
 /**
  * Format a number with commas
@@ -25,40 +24,11 @@ export async function runInstaller(): Promise<void> {
   showBanner();
 
   try {
-    // Step 1: Check if codegraph is available (skip install if already there)
-    let codegraphAvailable = false;
-    try {
-      const checkCmd = process.platform === 'win32' ? 'where codegraph' : 'command -v codegraph';
-      execSync(checkCmd, { stdio: 'pipe' });
-      codegraphAvailable = true;
-    } catch {
-      // Not installed globally yet
-    }
-
-    if (!codegraphAvailable) {
-      console.log(chalk.dim('  Installing codegraph globally...'));
-      try {
-        execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
-        success('Installed codegraph command globally');
-        codegraphAvailable = true;
-      } catch {
-        // May fail if no permissions, but that's ok - npx still works
-        info('Could not install globally — will use npx instead');
-        info('(MCP server and hooks will use npx @colbymchenry/codegraph)');
-      }
-      console.log();
-    }
-
-    // If codegraph binary isn't in PATH, tell config-writer to use npx for everything
-    if (!codegraphAvailable) {
-      setUseNpxFallback(true);
-    }
-
-    // Step 2: Ask for installation location
+    // Step 1: Ask for installation location
     const location = await promptInstallLocation();
     console.log();
 
-    // Step 3: Write MCP configuration
+    // Step 2: Write MCP configuration
     const alreadyHasMcp = hasMcpConfig(location);
     writeMcpConfig(location);
 
@@ -68,7 +38,7 @@ export async function runInstaller(): Promise<void> {
       success(`Added MCP server to ${location === 'global' ? '~/.claude.json' : './.claude.json'}`);
     }
 
-    // Step 4: Ask about auto-allow permissions
+    // Step 3: Ask about auto-allow permissions
     const autoAllow = await promptAutoAllow();
     console.log();
 
@@ -83,7 +53,7 @@ export async function runInstaller(): Promise<void> {
       }
     }
 
-    // Step 5: Write auto-sync hooks
+    // Step 4: Write auto-sync hooks
     const alreadyHasHooks = hasHooks(location);
     writeHooks(location);
 
@@ -93,7 +63,7 @@ export async function runInstaller(): Promise<void> {
       success(`Added auto-sync hooks to ${location === 'global' ? '~/.claude/settings.json' : './.claude/settings.json'}`);
     }
 
-    // Step 6: Write CLAUDE.md instructions
+    // Step 5: Write CLAUDE.md instructions
     const claudeMdResult = writeClaudeMd(location);
     const claudeMdPath = location === 'global' ? '~/.claude/CLAUDE.md' : './.claude/CLAUDE.md';
 
@@ -105,13 +75,13 @@ export async function runInstaller(): Promise<void> {
       success(`Added CodeGraph instructions to ${claudeMdPath}`);
     }
 
-    // Step 7: For local install, initialize the project
+    // Step 6: For local install, initialize the project
     if (location === 'local') {
       await initializeLocalProject();
     }
 
     // Show next steps
-    showNextSteps(location, !codegraphAvailable);
+    showNextSteps(location);
   } catch (err) {
     console.log();
     if (err instanceof Error && err.message.includes('readline was closed')) {
@@ -137,7 +107,7 @@ async function initializeLocalProject(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     error(`Could not load native modules: ${msg}`);
-    info('Skipping project initialization. You can run "codegraph init -i" later.');
+    info('Skipping project initialization. You can run "npx @colbymchenry/codegraph init -i" later.');
     info('If this persists, try a Node.js LTS version (20 or 22).');
     return;
   }
