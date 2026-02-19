@@ -98,32 +98,13 @@ function writeJsonFile(filePath: string, data: Record<string, any>): void {
 }
 
 /**
- * When true, all configs use `npx @colbymchenry/codegraph` instead of the
- * bare `codegraph` command.  Set by the installer when global install fails.
+ * Get the MCP server configuration
  */
-let useNpxFallback = false;
-
-export function setUseNpxFallback(value: boolean): void {
-  useNpxFallback = value;
-}
-
-/**
- * Get the MCP server configuration for the given location
- */
-function getMcpServerConfig(location: InstallLocation): Record<string, any> {
-  if (location === 'global' && !useNpxFallback) {
-    // Global: use 'codegraph' command directly (globally installed and in PATH)
-    return {
-      type: 'stdio',
-      command: 'codegraph',
-      args: ['serve', '--mcp'],
-    };
-  }
-  // Local or npx fallback: use npx to run the package
+function getMcpServerConfig(): Record<string, any> {
   return {
     type: 'stdio',
-    command: 'npx',
-    args: ['@colbymchenry/codegraph', 'serve', '--mcp'],
+    command: 'codegraph',
+    args: ['serve', '--mcp'],
   };
 }
 
@@ -140,7 +121,7 @@ export function writeMcpConfig(location: InstallLocation): void {
   }
 
   // Add or update codegraph server
-  config.mcpServers.codegraph = getMcpServerConfig(location);
+  config.mcpServers.codegraph = getMcpServerConfig();
 
   writeJsonFile(claudeJsonPath, config);
 }
@@ -221,8 +202,8 @@ export function hasPermissions(location: InstallLocation): boolean {
  * PostToolUse(Edit|Write) → mark-dirty (async, non-blocking)
  * Stop → sync-if-dirty (sync, ensures fresh index before next user turn)
  */
-function getHooksConfig(location: InstallLocation): Record<string, any> {
-  const command = (location === 'global' && !useNpxFallback) ? 'codegraph' : 'npx @colbymchenry/codegraph';
+function getHooksConfig(): Record<string, any> {
+  const command = 'codegraph';
 
   return {
     PostToolUse: [
@@ -277,7 +258,7 @@ export function writeHooks(location: InstallLocation): void {
     settings.hooks = {};
   }
 
-  const newHooks = getHooksConfig(location);
+  const newHooks = getHooksConfig();
 
   // For each hook event (PostToolUse, Stop), merge with existing entries
   for (const [event, newEntries] of Object.entries(newHooks)) {

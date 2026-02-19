@@ -8,7 +8,7 @@
 import { execSync } from 'child_process';
 import { showBanner, showNextSteps, success, error, info, chalk } from './banner';
 import { promptInstallLocation, promptAutoAllow, InstallLocation } from './prompts';
-import { writeMcpConfig, writePermissions, writeClaudeMd, writeHooks, hasMcpConfig, hasPermissions, hasHooks, setUseNpxFallback } from './config-writer';
+import { writeMcpConfig, writePermissions, writeClaudeMd, writeHooks, hasMcpConfig, hasPermissions, hasHooks } from './config-writer';
 
 /**
  * Format a number with commas
@@ -25,40 +25,24 @@ export async function runInstaller(): Promise<void> {
   showBanner();
 
   try {
-    // Step 1: Check if codegraph is available (skip install if already there)
-    let codegraphAvailable = false;
+    // Step 1: Install codegraph globally.
+    // Always run npm install -g — we can't use `command -v codegraph` to check
+    // because npx puts a temporary binary in PATH that vanishes when npx exits.
+    console.log(chalk.dim('  Installing codegraph globally...'));
     try {
-      const checkCmd = process.platform === 'win32' ? 'where codegraph' : 'command -v codegraph';
-      execSync(checkCmd, { stdio: 'pipe' });
-      codegraphAvailable = true;
+      execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
+      success('Installed codegraph command globally');
     } catch {
-      // Not installed globally yet
+      info('Could not install globally (permission denied)');
+      info('Try: sudo npm install -g @colbymchenry/codegraph');
     }
-
-    if (!codegraphAvailable) {
-      console.log(chalk.dim('  Installing codegraph globally...'));
-      try {
-        execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe' });
-        success('Installed codegraph command globally');
-        codegraphAvailable = true;
-      } catch {
-        // May fail if no permissions, but that's ok - npx still works
-        info('Could not install globally — will use npx instead');
-        info('(MCP server and hooks will use npx @colbymchenry/codegraph)');
-      }
-      console.log();
-    }
-
-    // If codegraph binary isn't in PATH, tell config-writer to use npx for everything
-    if (!codegraphAvailable) {
-      setUseNpxFallback(true);
-    }
+    console.log();
 
     // Step 2: Ask for installation location
     const location = await promptInstallLocation();
     console.log();
 
-    // Step 3: Write MCP configuration
+    // Step 3: Write MCP configuration (always uses npx for reliability)
     const alreadyHasMcp = hasMcpConfig(location);
     writeMcpConfig(location);
 
@@ -111,7 +95,7 @@ export async function runInstaller(): Promise<void> {
     }
 
     // Show next steps
-    showNextSteps(location, !codegraphAvailable);
+    showNextSteps(location);
   } catch (err) {
     console.log();
     if (err instanceof Error && err.message.includes('readline was closed')) {
