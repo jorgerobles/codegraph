@@ -1037,6 +1037,37 @@ program
   });
 
 /**
+ * codegraph unlock [path]
+ */
+program
+  .command('unlock [path]')
+  .description('Remove a stale lock file that is blocking indexing')
+  .action(async (pathArg: string | undefined) => {
+    const projectPath = resolveProjectPath(pathArg);
+
+    try {
+      if (!isInitialized(projectPath)) {
+        error(`CodeGraph not initialized in ${projectPath}`);
+        return;
+      }
+
+      const lockPath = path.join(getCodeGraphDir(projectPath), 'codegraph.lock');
+
+      if (!fs.existsSync(lockPath)) {
+        info('No lock file found — nothing to do');
+        return;
+      }
+
+      fs.unlinkSync(lockPath);
+      success('Removed lock file. You can now run indexing again.');
+    } catch (err) {
+      captureException(err);
+      error(`Failed to remove lock: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+/**
  * codegraph install
  */
 program
