@@ -185,7 +185,7 @@ export class FileLock {
   private held = false;
 
   /** Locks older than this are considered stale regardless of PID status */
-  private static readonly STALE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+  private static readonly STALE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
   constructor(lockPath: string) {
     this.lockPath = lockPath;
