@@ -310,10 +310,11 @@ ${symbolIndex}`;
         const stems = keywords.map(kw => kw.length > 5 ? kw.slice(0, Math.max(4, Math.ceil(kw.length * 0.5))) : kw);
         const uniqueStems = [...new Set(stems)];
 
-        const isRelevant = (node: Node): boolean => {
+        const _isRelevant = (node: Node): boolean => {
           const haystack = `${node.name} ${node.filePath} ${node.qualifiedName}`.toLowerCase();
           return uniqueStems.some(stem => haystack.includes(stem));
         };
+        void _isRelevant; // Used by keyword fallback when Claude is unavailable
 
         // Step 1: Find seed nodes
         const seedMap = new Map<string, Node>();
@@ -370,78 +371,57 @@ ${symbolIndex}`;
           if (!edgeSet.has(ek)) { edgeSet.add(ek); edgeList.push(edge); }
         };
 
-        // Step 2: For each seed, get callers/callees (depth 1)
-        // Only keep neighbors that are relevant or connect to other seeds
-        // Fall back to top-3 non-relevant only if seed has NO relevant neighbors
+        // Step 2: Find edges between seeds (trust Claude's picks)
+        // Only add non-seed nodes if they bridge two seeds
         for (const [seedId] of seedMap) {
-          if (nodeMap.size >= maxNodes) break;
-          const callers = this.cg.getCallers(seedId, 1);
+          // Check if this seed directly connects to another seed
           const callees = this.cg.getCallees(seedId, 1);
-          const neighbors = [...callers, ...callees];
-
-          const relevant: typeof neighbors = [];
-          const irrelevant: typeof neighbors = [];
-
-          for (const item of neighbors) {
-            if (seedMap.has(item.node.id) || isRelevant(item.node)) {
-              relevant.push(item);
-            } else {
-              irrelevant.push(item);
-            }
-          }
-
-          // Always add relevant neighbors
-          for (const item of relevant) {
-            if (nodeMap.size >= maxNodes && !nodeMap.has(item.node.id)) continue;
-            nodeMap.set(item.node.id, item.node);
-            addEdge(item.edge);
-          }
-
-          // For seeds with no relevant neighbors, add top-3 callees
-          // so they're not completely floating
-          if (relevant.length === 0 && irrelevant.length > 0) {
-            for (const item of irrelevant.slice(0, 3)) {
-              if (nodeMap.size >= maxNodes) break;
-              // Only add if it connects to another node already in the graph
-              if (nodeMap.has(item.node.id)) {
-                addEdge(item.edge);
-              }
+          const callers = this.cg.getCallers(seedId, 1);
+          for (const item of [...callees, ...callers]) {
+            if (seedMap.has(item.node.id)) {
+              addEdge(item.edge);
             }
           }
         }
 
-        // Step 3: Bridge pass — find shared callees between isolated seeds
-        // If two seeds both call the same function, add it as a bridge node
-        const isolatedSeeds = Array.from(seedMap.keys()).filter(id => {
-          return !edgeList.some(e => e.source === id || e.target === id);
-        });
+        // Step 3: Bridge pass — for isolated seeds, find shared callees
+        // that connect them to other seeds or to each other
+        const connectedAfterDirect = new Set<string>();
+        for (const e of edgeList) {
+          connectedAfterDirect.add(e.source);
+          connectedAfterDirect.add(e.target);
+        }
 
-        if (isolatedSeeds.length > 1) {
-          // Collect callees for each isolated seed
-          const seedCallees = new Map<string, { node: Node; seeds: string[] }>();
-          for (const seedId of isolatedSeeds) {
-            const callees = this.cg.getCallees(seedId, 1);
-            for (const item of callees) {
-              const existing = seedCallees.get(item.node.id);
-              if (existing) {
-                existing.seeds.push(seedId);
-              } else {
-                seedCallees.set(item.node.id, { node: item.node, seeds: [seedId] });
-              }
+        const isolatedSeeds = Array.from(seedMap.keys()).filter(id => !connectedAfterDirect.has(id));
+
+        // Collect all callees/callers of isolated seeds to find bridges
+        const bridgeCandidates = new Map<string, { node: Node; connectedSeeds: Set<string>; edges: Edge[] }>();
+        for (const seedId of isolatedSeeds) {
+          const callees = this.cg.getCallees(seedId, 1);
+          const callers = this.cg.getCallers(seedId, 1);
+          for (const item of [...callees, ...callers]) {
+            const candidate = bridgeCandidates.get(item.node.id);
+            if (candidate) {
+              candidate.connectedSeeds.add(seedId);
+              candidate.edges.push(item.edge);
+            } else {
+              bridgeCandidates.set(item.node.id, {
+                node: item.node,
+                connectedSeeds: new Set([seedId]),
+                edges: [item.edge],
+              });
             }
           }
-          // Add bridge nodes that connect 2+ isolated seeds
-          for (const [bridgeId, { node: bridgeNode, seeds }] of seedCallees) {
-            if (seeds.length >= 2 && nodeMap.size < maxNodes) {
-              nodeMap.set(bridgeId, bridgeNode);
-              // Add edges from each seed to the bridge
-              for (const seedId of seeds) {
-                const callees = this.cg.getCallees(seedId, 1);
-                for (const item of callees) {
-                  if (item.node.id === bridgeId) addEdge(item.edge);
-                }
-              }
-            }
+        }
+
+        // Add bridges that connect 2+ seeds, or connect an isolated seed to a connected one
+        for (const [bridgeId, { node: bridgeNode, connectedSeeds, edges }] of bridgeCandidates) {
+          const connectsToGraph = connectedAfterDirect.has(bridgeId) || seedMap.has(bridgeId);
+          const connectsMultiple = connectedSeeds.size >= 2;
+
+          if ((connectsMultiple || connectsToGraph) && nodeMap.size < maxNodes) {
+            nodeMap.set(bridgeId, bridgeNode);
+            for (const edge of edges) addEdge(edge);
           }
         }
 
@@ -456,7 +436,7 @@ ${symbolIndex}`;
           }
         }
 
-        // Step 5: Filter edges and remove isolated non-root nodes
+        // Step 5: Filter and clean up
         const finalEdges = edgeList.filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
 
         const connectedIds = new Set<string>();
