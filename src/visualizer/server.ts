@@ -397,11 +397,55 @@ ${symbolIndex}`;
             addEdge(item.edge);
           }
 
-          // Seeds with no relevant neighbors stay isolated — user can
-          // right-click → expand to explore manually. No noise added.
+          // For seeds with no relevant neighbors, add top-3 callees
+          // so they're not completely floating
+          if (relevant.length === 0 && irrelevant.length > 0) {
+            for (const item of irrelevant.slice(0, 3)) {
+              if (nodeMap.size >= maxNodes) break;
+              // Only add if it connects to another node already in the graph
+              if (nodeMap.has(item.node.id)) {
+                addEdge(item.edge);
+              }
+            }
+          }
         }
 
-        // Step 3: Cross-connection pass — find edges between all result nodes
+        // Step 3: Bridge pass — find shared callees between isolated seeds
+        // If two seeds both call the same function, add it as a bridge node
+        const isolatedSeeds = Array.from(seedMap.keys()).filter(id => {
+          return !edgeList.some(e => e.source === id || e.target === id);
+        });
+
+        if (isolatedSeeds.length > 1) {
+          // Collect callees for each isolated seed
+          const seedCallees = new Map<string, { node: Node; seeds: string[] }>();
+          for (const seedId of isolatedSeeds) {
+            const callees = this.cg.getCallees(seedId, 1);
+            for (const item of callees) {
+              const existing = seedCallees.get(item.node.id);
+              if (existing) {
+                existing.seeds.push(seedId);
+              } else {
+                seedCallees.set(item.node.id, { node: item.node, seeds: [seedId] });
+              }
+            }
+          }
+          // Add bridge nodes that connect 2+ isolated seeds
+          for (const [bridgeId, { node: bridgeNode, seeds }] of seedCallees) {
+            if (seeds.length >= 2 && nodeMap.size < maxNodes) {
+              nodeMap.set(bridgeId, bridgeNode);
+              // Add edges from each seed to the bridge
+              for (const seedId of seeds) {
+                const callees = this.cg.getCallees(seedId, 1);
+                for (const item of callees) {
+                  if (item.node.id === bridgeId) addEdge(item.edge);
+                }
+              }
+            }
+          }
+        }
+
+        // Step 4: Cross-connection pass — find edges between all result nodes
         for (const [nodeId] of nodeMap) {
           const callers = this.cg.getCallers(nodeId, 1);
           const callees = this.cg.getCallees(nodeId, 1);
@@ -412,7 +456,7 @@ ${symbolIndex}`;
           }
         }
 
-        // Step 4: Filter edges and remove isolated non-root nodes
+        // Step 5: Filter edges and remove isolated non-root nodes
         const finalEdges = edgeList.filter(e => nodeMap.has(e.source) && nodeMap.has(e.target));
 
         const connectedIds = new Set<string>();
