@@ -33,10 +33,13 @@ export function matchByExactName(
   // Multiple matches - try to narrow down
   const bestMatch = findBestMatch(ref, candidates, context);
   if (bestMatch) {
+    // Lower confidence when the match is from a distant/unrelated module
+    const proximity = computePathProximity(ref.filePath, bestMatch.filePath);
+    const confidence = proximity >= 30 ? 0.7 : 0.4;
     return {
       original: ref,
       targetNodeId: bestMatch.id,
-      confidence: 0.7,
+      confidence,
       resolvedBy: 'exact-match',
     };
   }
@@ -134,6 +137,28 @@ export function matchMethodCall(
 }
 
 /**
+ * Compute directory proximity between two file paths.
+ * Returns a score based on the number of shared directory segments.
+ * Higher score = closer in directory tree.
+ */
+function computePathProximity(filePath1: string, filePath2: string): number {
+  const dir1 = filePath1.split('/').slice(0, -1);
+  const dir2 = filePath2.split('/').slice(0, -1);
+
+  let shared = 0;
+  for (let i = 0; i < Math.min(dir1.length, dir2.length); i++) {
+    if (dir1[i] === dir2[i]) {
+      shared++;
+    } else {
+      break;
+    }
+  }
+
+  // Each shared directory segment contributes 15 points, capped at 80
+  return Math.min(shared * 15, 80);
+}
+
+/**
  * Find the best matching node when there are multiple candidates
  */
 function findBestMatch(
@@ -143,9 +168,10 @@ function findBestMatch(
 ): Node | null {
   // Prioritization rules:
   // 1. Same file > different file
-  // 2. Same language > different language
-  // 3. Functions/methods > classes/types (for call references)
-  // 4. Exported > non-exported
+  // 2. Directory proximity (same module/package > different module)
+  // 3. Same language > different language
+  // 4. Functions/methods > classes/types (for call references)
+  // 5. Exported > non-exported
 
   let bestScore = -1;
   let bestNode: Node | null = null;
@@ -157,6 +183,9 @@ function findBestMatch(
     if (candidate.filePath === ref.filePath) {
       score += 100;
     }
+
+    // Directory proximity bonus — strongly prefer same module/package
+    score += computePathProximity(ref.filePath, candidate.filePath);
 
     // Same language bonus
     if (candidate.language === ref.language) {
