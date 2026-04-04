@@ -206,9 +206,27 @@ export function getSupportedLanguages(): Language[] {
 }
 
 /**
+ * Reset the cached parser for a language to reclaim WASM heap memory.
+ * The tree-sitter WASM runtime accumulates fragmented memory over thousands
+ * of parses. Deleting and recreating the Parser instance forces the WASM
+ * heap to reset, preventing "memory access out of bounds" crashes in
+ * large repos.
+ */
+export function resetParser(language: Language): void {
+  const old = parserCache.get(language);
+  if (old) {
+    old.delete();
+    parserCache.delete(language);
+  }
+}
+
+/**
  * Clear parser/grammar caches (useful for testing)
  */
 export function clearParserCache(): void {
+  for (const parser of parserCache.values()) {
+    parser.delete();
+  }
   parserCache.clear();
   // Note: languageCache is NOT cleared — WASM languages persist.
   // To fully re-init, set parserInitialized = false and call initGrammars() again.

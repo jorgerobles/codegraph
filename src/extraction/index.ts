@@ -18,7 +18,7 @@ import {
 } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
-import { detectLanguage, isLanguageSupported, initGrammars, loadGrammarsForLanguages } from './grammars';
+import { detectLanguage, isLanguageSupported, initGrammars, loadGrammarsForLanguages, resetParser } from './grammars';
 import { logDebug, logWarn } from '../errors';
 import { validatePathWithinRoot, normalizePath } from '../utils';
 import picomatch from 'picomatch';
@@ -28,6 +28,12 @@ import picomatch from 'picomatch';
  * File reads are I/O-bound; batching overlaps I/O wait with CPU parse work.
  */
 const FILE_IO_BATCH_SIZE = 10;
+
+/**
+ * Reset tree-sitter parser after this many parses per language to reclaim
+ * WASM heap memory and prevent "memory access out of bounds" crashes.
+ */
+const PARSER_RESET_INTERVAL = 5000;
 
 /**
  * Progress callback for indexing operations
@@ -412,6 +418,7 @@ export class ExtractionOrchestrator {
     // Phase 2: Parse files (read in parallel batches, parse/store sequentially)
     const total = files.length;
     let processed = 0;
+    const parseCounts = new Map<Language, number>(); // track parses per language for WASM reset
 
     for (let i = 0; i < files.length; i += FILE_IO_BATCH_SIZE) {
       if (signal?.aborted) {
@@ -482,6 +489,16 @@ export class ExtractionOrchestrator {
         }
 
         const result = await this.indexFileWithContent(filePath, content, stats);
+
+        // Periodically reset the parser to reclaim WASM heap memory.
+        // Without this, tree-sitter's WASM runtime fragments its heap
+        // across thousands of parses and eventually crashes.
+        const lang = detectLanguage(filePath);
+        const count = (parseCounts.get(lang) ?? 0) + 1;
+        parseCounts.set(lang, count);
+        if (count % PARSER_RESET_INTERVAL === 0) {
+          resetParser(lang);
+        }
 
         if (result.errors.length > 0) {
           // Annotate errors with file path if not already set

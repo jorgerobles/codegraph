@@ -160,12 +160,12 @@ async function initializeLocalProject(): Promise<void> {
       };
       const phaseName = phaseNames[progress.phase] || progress.phase;
       const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
-      process.stdout.write(`\r  ${chalk.dim(phaseName)}... ${percent}%   `);
+      process.stdout.write(`\r  ${chalk.dim(phaseName)}... ${percent}%\x1b[K`);
     },
   });
 
   // Clear progress line
-  process.stdout.write('\r' + ' '.repeat(50) + '\r');
+  process.stdout.write('\r\x1b[K');
 
   if (result.filesErrored > 0) {
     success(`Indexed ${formatNumber(result.filesIndexed)} files (${formatNumber(result.filesErrored)} files failed, ${formatNumber(result.nodesCreated)} symbols)`);

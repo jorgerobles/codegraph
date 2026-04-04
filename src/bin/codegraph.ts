@@ -181,6 +181,16 @@ function progressBar(current: number, total: number, width: number = 30): string
 }
 
 /**
+ * Truncate a string to fit a given visible width, adding ellipsis if needed
+ */
+function truncate(str: string, maxWidth: number): string {
+  if (maxWidth <= 0) return '';
+  if (str.length <= maxWidth) return str;
+  if (maxWidth <= 1) return str.charAt(0);
+  return '\u2026' + str.slice(-(maxWidth - 1));
+}
+
+/**
  * Print a progress update (overwrites current line)
  */
 function printProgress(progress: IndexProgress): void {
@@ -192,15 +202,24 @@ function printProgress(progress: IndexProgress): void {
   };
 
   const phaseName = phaseNames[progress.phase] || progress.phase;
-  const file = progress.currentFile ? chalk.dim(` ${progress.currentFile}`) : '';
+  const cols = process.stdout.columns || 80;
 
   if (progress.total > 0) {
     const bar = progressBar(progress.current, progress.total);
-    process.stdout.write(`\r${chalk.cyan(phaseName)}: ${bar}${file}`.padEnd(100));
+    // "Phase: [bar] XX% filename" — calculate space left for filename
+    // phaseName + ": " = phaseName.length + 2, bar visible = 30 + 1 + 4 = 35, space before file = 1
+    const prefixWidth = phaseName.length + 2 + 35;
+    const fileMaxWidth = cols - prefixWidth - 1;
+    const file = progress.currentFile ? chalk.dim(` ${truncate(progress.currentFile, fileMaxWidth)}`) : '';
+    process.stdout.write(`\r${chalk.cyan(phaseName)}: ${bar}${file}\x1b[K`);
   } else {
     // No known total (e.g. scanning) — show a running count
+    const countStr = progress.current > 0 ? ` ${formatNumber(progress.current)} found` : '';
+    const prefixWidth = phaseName.length + 1 + countStr.length;
+    const fileMaxWidth = cols - prefixWidth - 1;
+    const file = progress.currentFile ? chalk.dim(` ${truncate(progress.currentFile, fileMaxWidth)}`) : '';
     const count = progress.current > 0 ? ` ${chalk.green(formatNumber(progress.current))} found` : '';
-    process.stdout.write(`\r${chalk.cyan(phaseName)}:${count}${file}`.padEnd(100));
+    process.stdout.write(`\r${chalk.cyan(phaseName)}:${count}${file}\x1b[K`);
   }
 }
 
@@ -390,7 +409,7 @@ program
         });
 
         // Clear progress line
-        process.stdout.write('\r' + ' '.repeat(100) + '\r');
+        process.stdout.write('\r\x1b[K');
 
         printIndexResult(result, projectPath);
       } else {
@@ -488,7 +507,7 @@ program
 
       // Clear progress line
       if (!options.quiet) {
-        process.stdout.write('\r' + ' '.repeat(100) + '\r');
+        process.stdout.write('\r\x1b[K');
       }
 
       if (!options.quiet) {
@@ -533,7 +552,7 @@ program
 
       // Clear progress line
       if (!options.quiet) {
-        process.stdout.write('\r' + ' '.repeat(100) + '\r');
+        process.stdout.write('\r\x1b[K');
       }
 
       const totalChanges = result.filesAdded + result.filesModified + result.filesRemoved;

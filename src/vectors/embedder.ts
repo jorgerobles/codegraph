@@ -135,7 +135,7 @@ export class TextEmbedder {
         ? (progress: { status: string; file?: string; progress?: number }) => {
             if (progress.status === 'progress' && progress.file && progress.progress) {
               const pct = Math.round(progress.progress);
-              process.stdout.write(`\rDownloading ${progress.file}: ${pct}%`);
+              process.stdout.write(`\rDownloading ${progress.file}: ${pct}%\x1b[K`);
             } else if (progress.status === 'done') {
               process.stdout.write('\n');
             }
