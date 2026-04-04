@@ -45,6 +45,12 @@ async function loadCodeGraph(): Promise<typeof import('../index')> {
 
 type IndexProgress = import('../index').IndexProgress;
 
+// Dynamic import helper — tsc compiles import() to require() in CJS mode,
+// which fails for ESM-only packages. This bypasses the transformation.
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
+const importESM = new Function('specifier', 'return import(specifier)') as
+  (specifier: string) => Promise<typeof import('@clack/prompts')>;
+
 // Check if running with no arguments - run installer
 if (process.argv.length === 2) {
   import('../installer').then(({ runInstaller }) =>
@@ -168,59 +174,140 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds.toFixed(0)}s`;
 }
 
-/**
- * Create a progress bar string
- */
-function progressBar(current: number, total: number, width: number = 30): string {
-  const percent = total > 0 ? current / total : 0;
-  const filled = Math.round(width * percent);
-  const empty = width - filled;
-  const bar = chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
-  const percentStr = `${Math.round(percent * 100)}%`.padStart(4);
-  return `${bar} ${percentStr}`;
+// =============================================================================
+// Shimmer Progress Renderer (devpit-style animation)
+// =============================================================================
+
+const SPINNER_GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽'];
+const ANIM_INTERVAL = 150;
+const FRAMES_PER_GLYPH = 3;
+
+function lerp(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
 }
 
-/**
- * Truncate a string to fit a given visible width, adding ellipsis if needed
- */
-function truncate(str: string, maxWidth: number): string {
-  if (maxWidth <= 0) return '';
-  if (str.length <= maxWidth) return str;
-  if (maxWidth <= 1) return str.charAt(0);
-  return '\u2026' + str.slice(-(maxWidth - 1));
+function shimmerColor(frame: number): string {
+  const t = (Math.sin(frame * 2 * Math.PI / 13) + 1) / 2;
+  const r = lerp(160, 251, t);
+  const g = lerp(100, 191, t);
+  const b = lerp(9, 36, t);
+  return `\x1b[38;2;${r};${g};${b}m\x1b[1m`;
 }
 
-/**
- * Print a progress update (overwrites current line)
- */
-function printProgress(progress: IndexProgress): void {
-  const phaseNames: Record<string, string> = {
-    scanning: 'Scanning files',
-    parsing: 'Parsing code',
-    storing: 'Storing data',
-    resolving: 'Resolving refs',
-  };
+const PHASE_NAMES: Record<string, string> = {
+  scanning: 'Scanning files',
+  parsing: 'Parsing code',
+  storing: 'Storing data',
+  resolving: 'Resolving refs',
+};
 
-  const phaseName = phaseNames[progress.phase] || progress.phase;
-  const cols = process.stdout.columns || 80;
+interface ShimmerProgress {
+  onProgress: (progress: IndexProgress) => void;
+  stop: () => void;
+}
 
-  if (progress.total > 0) {
-    const bar = progressBar(progress.current, progress.total);
-    // "Phase: [bar] XX% filename" — calculate space left for filename
-    // phaseName + ": " = phaseName.length + 2, bar visible = 30 + 1 + 4 = 35, space before file = 1
-    const prefixWidth = phaseName.length + 2 + 35;
-    const fileMaxWidth = cols - prefixWidth - 1;
-    const file = progress.currentFile ? chalk.dim(` ${truncate(progress.currentFile, fileMaxWidth)}`) : '';
-    process.stdout.write(`\r${chalk.cyan(phaseName)}: ${bar}${file}\x1b[K`);
-  } else {
-    // No known total (e.g. scanning) — show a running count
-    const countStr = progress.current > 0 ? ` ${formatNumber(progress.current)} found` : '';
-    const prefixWidth = phaseName.length + 1 + countStr.length;
-    const fileMaxWidth = cols - prefixWidth - 1;
-    const file = progress.currentFile ? chalk.dim(` ${truncate(progress.currentFile, fileMaxWidth)}`) : '';
-    const count = progress.current > 0 ? ` ${chalk.green(formatNumber(progress.current))} found` : '';
-    process.stdout.write(`\r${chalk.cyan(phaseName)}:${count}${file}\x1b[K`);
+function createShimmerProgress(): ShimmerProgress {
+  const startTime = Date.now();
+  let interval: ReturnType<typeof setInterval> | null = null;
+  let currentMessage = '';
+  let currentPercent = -1;
+  let currentCount = 0;
+  let lastPhase = '';
+
+  function animFrame(): number {
+    return Math.floor((Date.now() - startTime) / ANIM_INTERVAL);
   }
+
+  function spinnerGlyph(): string {
+    const idx = Math.floor(animFrame() / FRAMES_PER_GLYPH) % SPINNER_GLYPHS.length;
+    return SPINNER_GLYPHS[idx] ?? '·';
+  }
+
+  function renderBar(filled: number, empty: number): string {
+    if (filled === 0) return `${colors.dim}${'░'.repeat(empty)}${colors.reset}`;
+    // Shimmer sweeps left-to-right across the filled portion
+    const cycleFrames = 24;
+    const shimmerPos = ((animFrame() % cycleFrames) / cycleFrames) * (filled + 6) - 3;
+    const shimmerWidth = 3;
+    let bar = '';
+    for (let i = 0; i < filled; i++) {
+      const dist = Math.abs(i - shimmerPos);
+      const t = Math.max(0, 1 - dist / shimmerWidth);
+      const r = lerp(160, 251, t);
+      const g = lerp(100, 191, t);
+      const b = lerp(9, 36, t);
+      bar += `\x1b[38;2;${r};${g};${b}m\x1b[1m█`;
+    }
+    bar += `${colors.reset}${colors.dim}${'░'.repeat(empty)}${colors.reset}`;
+    return bar;
+  }
+
+  function render() {
+    const glyph = spinnerGlyph();
+    const frame = animFrame();
+    const color = shimmerColor(frame);
+    const rst = colors.reset;
+    const dm = colors.dim;
+
+    let line: string;
+    if (currentPercent >= 0) {
+      const barWidth = 25;
+      const filled = Math.round(barWidth * currentPercent / 100);
+      const empty = barWidth - filled;
+      line = `${dm}│${rst}  ${color}${glyph}${rst} ${currentMessage}  ${renderBar(filled, empty)}  ${currentPercent}%`;
+    } else if (currentCount > 0) {
+      line = `${dm}│${rst}  ${color}${glyph}${rst} ${currentMessage}... ${formatNumber(currentCount)} found`;
+    } else {
+      line = `${dm}│${rst}  ${color}${glyph}${rst} ${currentMessage}...`;
+    }
+
+    process.stdout.write(`\r\x1b[K${line}`);
+  }
+
+  function finishPhase() {
+    if (!currentMessage) return;
+    process.stdout.write(`\r\x1b[K`);
+    let detail = '';
+    if (currentPercent >= 0) detail = ' — done';
+    else if (currentCount > 0) detail = ` — ${formatNumber(currentCount)} found`;
+    process.stdout.write(`${colors.dim}│${colors.reset}  ${colors.green}◆${colors.reset} ${currentMessage}${detail}\n`);
+  }
+
+  // Start animation loop
+  interval = setInterval(render, ANIM_INTERVAL);
+
+  return {
+    onProgress(progress: IndexProgress) {
+      const phaseName = PHASE_NAMES[progress.phase] || progress.phase;
+
+      if (progress.phase !== lastPhase && lastPhase) {
+        finishPhase();
+      }
+      lastPhase = progress.phase;
+      currentMessage = phaseName;
+
+      if (progress.total > 0) {
+        currentPercent = Math.round((progress.current / progress.total) * 100);
+        currentCount = 0;
+      } else if (progress.current > 0) {
+        currentPercent = -1;
+        currentCount = progress.current;
+      } else {
+        currentPercent = -1;
+        currentCount = 0;
+      }
+
+      // Render immediately — scanning is synchronous so setInterval can't fire
+      render();
+    },
+    stop() {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      finishPhase();
+    },
+  };
 }
 
 /**
@@ -251,30 +338,37 @@ function warn(message: string): void {
   console.log(chalk.yellow('⚠') + ' ' + message);
 }
 
+type IndexResult = {
+  success: boolean;
+  filesIndexed: number;
+  filesSkipped: number;
+  filesErrored: number;
+  nodesCreated: number;
+  edgesCreated: number;
+  errors: Array<{ message: string; filePath?: string; severity: string; code?: string }>;
+  durationMs: number;
+};
+
 /**
- * Print a summary of indexing results with clear error breakdown
+ * Print indexing results using clack log methods
  */
-function printIndexResult(result: { success: boolean; filesIndexed: number; filesSkipped: number; filesErrored: number; nodesCreated: number; edgesCreated: number; errors: Array<{ message: string; filePath?: string; severity: string; code?: string }>; durationMs: number }, projectPath?: string): void {
+function printIndexResult(clack: typeof import('@clack/prompts'), result: IndexResult, projectPath?: string): void {
   const hasErrors = result.filesErrored > 0;
 
-  // Always show what was indexed
   if (result.filesIndexed > 0) {
     if (hasErrors) {
-      success(`Indexed ${formatNumber(result.filesIndexed)} files (${formatNumber(result.filesErrored)} could not be parsed)`);
+      clack.log.success(`Indexed ${formatNumber(result.filesIndexed)} files (${formatNumber(result.filesErrored)} could not be parsed)`);
     } else {
-      success(`Indexed ${formatNumber(result.filesIndexed)} files`);
+      clack.log.success(`Indexed ${formatNumber(result.filesIndexed)} files`);
     }
-    info(`Created ${formatNumber(result.nodesCreated)} nodes and ${formatNumber(result.edgesCreated)} edges`);
-    info(`Completed in ${formatDuration(result.durationMs)}`);
+    clack.log.info(`${formatNumber(result.nodesCreated)} nodes, ${formatNumber(result.edgesCreated)} edges in ${formatDuration(result.durationMs)}`);
   } else if (hasErrors) {
-    error(`Indexing failed — all ${formatNumber(result.filesErrored)} files had errors`);
+    clack.log.error(`Indexing failed — all ${formatNumber(result.filesErrored)} files had errors`);
   } else {
-    warn('No files found to index');
+    clack.log.warn('No files found to index');
   }
 
-  // Show error breakdown if there were errors
   if (hasErrors) {
-    // Group errors by code for a concise summary
     const errorsByCode = new Map<string, number>();
     for (const err of result.errors) {
       if (err.severity === 'error') {
@@ -292,26 +386,20 @@ function printIndexResult(result: { success: boolean; filesIndexed: number; file
       parser_error: 'parser initialization failures',
     };
 
-    console.log('');
-    console.log(chalk.dim('  Error breakdown:'));
-    for (const [code, count] of errorsByCode) {
-      const label = codeLabels[code] || code;
-      console.log(chalk.dim(`    ${formatNumber(count)} ${label}`));
-    }
+    const breakdown = Array.from(errorsByCode)
+      .map(([code, count]) => `${formatNumber(count)} ${codeLabels[code] || code}`)
+      .join('\n');
+    clack.note(breakdown, 'Error breakdown');
 
-    // Write detailed error log to .codegraph/errors.log
     if (projectPath) {
       writeErrorLog(projectPath, result.errors);
+      clack.log.info('See .codegraph/errors.log for details');
     }
 
-    // Reassure the user the index is usable
     if (result.filesIndexed > 0) {
-      console.log('');
-      info('The index is fully usable — only the failed files are missing from the graph.');
-      info('This is common in large repos with test fixtures or generated files that use non-standard syntax.');
+      clack.log.info('The index is fully usable — only the failed files are missing.');
     }
   } else if (projectPath) {
-    // No errors — clean up any stale error log
     const logPath = path.join(projectPath, '.codegraph', 'errors.log');
     if (fs.existsSync(logPath)) {
       fs.unlinkSync(logPath);
@@ -363,7 +451,6 @@ function writeErrorLog(projectPath: string, errors: Array<{ message: string; fil
   }
 
   fs.writeFileSync(logPath, lines.join('\n') + '\n');
-  info(`See .codegraph/errors.log for the full list of failed files`);
 }
 
 // =============================================================================
@@ -378,47 +465,41 @@ program
   .description('Initialize CodeGraph in a project directory')
   .option('-i, --index', 'Run initial indexing after initialization')
   .action(async (pathArg: string | undefined, options: { index?: boolean }) => {
-    // init should always target the exact path given (or cwd), never walk up parents
     const projectPath = path.resolve(pathArg || process.cwd());
+    const clack = await importESM('@clack/prompts');
 
-    console.log(chalk.bold('\nInitializing CodeGraph...\n'));
+    clack.intro('Initializing CodeGraph');
 
     try {
-      // Check if already initialized
       if (isInitialized(projectPath)) {
-        warn(`CodeGraph already initialized in ${projectPath}`);
-        info('Use "codegraph index" to re-index or "codegraph sync" to update');
+        clack.log.warn(`Already initialized in ${projectPath}`);
+        clack.log.info('Use "codegraph index" to re-index or "codegraph sync" to update');
+        clack.outro('');
         return;
       }
 
-      // Initialize
       const { default: CodeGraph } = await loadCodeGraph();
-      const cg = await CodeGraph.init(projectPath, {
-        index: false, // We'll handle indexing ourselves for progress
-      });
+      const cg = await CodeGraph.init(projectPath, { index: false });
+      clack.log.success(`Initialized in ${projectPath}`);
 
-      success(`Initialized CodeGraph in ${projectPath}`);
-      info(`Created .codegraph/ directory`);
-
-      // Run initial index if requested
       if (options.index) {
-        console.log('\nIndexing project...\n');
+        process.stdout.write(`${colors.dim}│${colors.reset}\n`);
+        const progress = createShimmerProgress();
 
         const result = await cg.indexAll({
-          onProgress: printProgress,
+          onProgress: progress.onProgress,
         });
 
-        // Clear progress line
-        process.stdout.write('\r\x1b[K');
-
-        printIndexResult(result, projectPath);
+        progress.stop();
+        printIndexResult(clack, result, projectPath);
       } else {
-        info('Run "codegraph index" to index the project');
+        clack.log.info('Run "codegraph index" to index the project');
       }
 
+      clack.outro('Done');
       cg.destroy();
     } catch (err) {
-      error(`Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+      clack.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
@@ -489,35 +570,38 @@ program
       const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
-      if (!options.quiet) {
-        console.log(chalk.bold('\nIndexing project...\n'));
+      if (options.quiet) {
+        // Quiet mode: no UI, just run
+        if (options.force) cg.clear();
+        const result = await cg.indexAll();
+        if (!result.success) process.exit(1);
+        cg.destroy();
+        return;
       }
 
-      // Clear existing data if force
+      const clack = await importESM('@clack/prompts');
+      clack.intro('Indexing project');
+
       if (options.force) {
         cg.clear();
-        if (!options.quiet) {
-          info('Cleared existing index');
-        }
+        clack.log.info('Cleared existing index');
       }
+
+      process.stdout.write(`${colors.dim}│${colors.reset}\n`);
+      const progress = createShimmerProgress();
 
       const result = await cg.indexAll({
-        onProgress: options.quiet ? undefined : printProgress,
+        onProgress: progress.onProgress,
       });
 
-      // Clear progress line
-      if (!options.quiet) {
-        process.stdout.write('\r\x1b[K');
-      }
-
-      if (!options.quiet) {
-        printIndexResult(result, projectPath);
-      }
+      progress.stop();
+      printIndexResult(clack, result, projectPath);
 
       if (!result.success) {
         process.exit(1);
       }
 
+      clack.outro('Done');
       cg.destroy();
     } catch (err) {
       error(`Failed to index: ${err instanceof Error ? err.message : String(err)}`);
@@ -546,35 +630,38 @@ program
       const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
 
+      if (options.quiet) {
+        await cg.sync();
+        cg.destroy();
+        return;
+      }
+
+      const clack = await importESM('@clack/prompts');
+      clack.intro('Syncing CodeGraph');
+
+      process.stdout.write(`${colors.dim}│${colors.reset}\n`);
+      const progress = createShimmerProgress();
+
       const result = await cg.sync({
-        onProgress: options.quiet ? undefined : printProgress,
+        onProgress: progress.onProgress,
       });
 
-      // Clear progress line
-      if (!options.quiet) {
-        process.stdout.write('\r\x1b[K');
-      }
+      progress.stop();
 
       const totalChanges = result.filesAdded + result.filesModified + result.filesRemoved;
 
-      if (!options.quiet) {
-        if (totalChanges === 0) {
-          success('Already up to date');
-        } else {
-          success(`Synced ${formatNumber(totalChanges)} changed files`);
-          if (result.filesAdded > 0) {
-            info(`  Added: ${result.filesAdded}`);
-          }
-          if (result.filesModified > 0) {
-            info(`  Modified: ${result.filesModified}`);
-          }
-          if (result.filesRemoved > 0) {
-            info(`  Removed: ${result.filesRemoved}`);
-          }
-          info(`Updated ${formatNumber(result.nodesUpdated)} nodes in ${formatDuration(result.durationMs)}`);
-        }
+      if (totalChanges === 0) {
+        clack.log.info('Already up to date');
+      } else {
+        clack.log.success(`Synced ${formatNumber(totalChanges)} changed files`);
+        const details: string[] = [];
+        if (result.filesAdded > 0) details.push(`Added: ${result.filesAdded}`);
+        if (result.filesModified > 0) details.push(`Modified: ${result.filesModified}`);
+        if (result.filesRemoved > 0) details.push(`Removed: ${result.filesRemoved}`);
+        clack.log.info(`${details.join(', ')} — ${formatNumber(result.nodesUpdated)} nodes in ${formatDuration(result.durationMs)}`);
       }
 
+      clack.outro('Done');
       cg.destroy();
     } catch (err) {
       if (!options.quiet) {

@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { InstallLocation } from './prompts';
+export type InstallLocation = 'global' | 'local';
 import {
   CLAUDE_MD_TEMPLATE,
   CODEGRAPH_SECTION_START,
