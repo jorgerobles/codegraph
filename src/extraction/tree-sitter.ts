@@ -172,8 +172,17 @@ export class TreeSitterExtractor {
       this.visitNode(this.tree.rootNode);
       this.nodeStack.pop();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+
+      // WASM memory errors leave the module in a corrupted state — all subsequent
+      // parses would also fail. Re-throw so the worker can detect and crash,
+      // forcing a clean restart with a fresh heap.
+      if (msg.includes('memory access out of bounds') || msg.includes('out of memory')) {
+        throw error;
+      }
+
       this.errors.push({
-        message: `Parse error: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Parse error: ${msg}`,
         filePath: this.filePath,
         severity: 'error',
         code: 'parse_error',

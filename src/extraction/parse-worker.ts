@@ -33,6 +33,14 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
       parentPort!.postMessage({ type: 'parse-result', id, result });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+
+      // WASM memory errors leave the module in a corrupted state — all
+      // subsequent parses would also fail (cascading failures). Crash the
+      // worker so the main thread spawns a fresh one with a clean heap.
+      if (message.includes('memory access out of bounds') || message.includes('out of memory')) {
+        process.exit(1);
+      }
+
       parentPort!.postMessage({
         type: 'parse-result',
         id,

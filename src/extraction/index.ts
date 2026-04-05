@@ -45,7 +45,7 @@ const PARSE_TIMEOUT_MS = 10_000;
  * V8 isolate by terminating the worker thread and spawning a fresh one.
  * This interval balances memory usage against the cost of reloading grammars.
  */
-const WORKER_RECYCLE_INTERVAL = 500;
+const WORKER_RECYCLE_INTERVAL = 250;
 
 /**
  * Progress callback for indexing operations
@@ -521,8 +521,12 @@ export class ExtractionOrchestrator {
           logWarn('Parse worker exited unexpectedly', { code });
           rejectAllPending(`Worker exited with code ${code}`);
         }
-        // Clear reference so we know to respawn
-        if (parseWorker === w) parseWorker = null;
+        // Clear reference so we know to respawn, reset count so
+        // the fresh worker gets a full cycle before recycling.
+        if (parseWorker === w) {
+          parseWorker = null;
+          workerParseCount = 0;
+        }
       });
     }
 
@@ -580,17 +584,20 @@ export class ExtractionOrchestrator {
       const id = nextId++;
       workerParseCount++;
 
+      // Scale timeout for large files: base 10s + 10s per 100KB
+      const timeoutMs = PARSE_TIMEOUT_MS + Math.floor(content.length / 100_000) * 10_000;
+
       return new Promise<ExtractionResult>((resolve, reject) => {
         const timer = setTimeout(() => {
           pendingParses.delete(id);
-          log(`TIMEOUT: ${filePath} exceeded ${PARSE_TIMEOUT_MS}ms — killing worker`);
+          log(`TIMEOUT: ${filePath} exceeded ${timeoutMs}ms — killing worker`);
           // Reject FIRST — worker.terminate() can hang if WASM is stuck
           parseWorker = null;
           workerParseCount = 0;
-          reject(new Error(`Parse timed out after ${PARSE_TIMEOUT_MS}ms`));
+          reject(new Error(`Parse timed out after ${timeoutMs}ms`));
           // Fire-and-forget: kill the stuck worker in the background
           worker.terminate().catch(() => {});
-        }, PARSE_TIMEOUT_MS);
+        }, timeoutMs);
 
         pendingParses.set(id, { resolve, reject, timer });
         worker.postMessage({ type: 'parse', id, filePath, content });
@@ -708,6 +715,58 @@ export class ExtractionOrchestrator {
           filesErrored++;
         } else {
           filesSkipped++;
+        }
+      }
+    }
+
+    // Retry pass: files that failed due to WASM memory corruption may succeed
+    // on a fresh worker with a clean heap. Collect retryable failures, recycle
+    // the worker, and try each one individually.
+    const retryableErrors = errors.filter(
+      (e) => e.code === 'parse_error' && e.filePath &&
+        (e.message.includes('Worker exited') || e.message.includes('memory access out of bounds'))
+    );
+
+    if (retryableErrors.length > 0 && WorkerClass) {
+      log(`Retrying ${retryableErrors.length} files that failed due to WASM memory errors...`);
+
+      // Force a fresh worker
+      recycleWorker();
+
+      for (const errEntry of retryableErrors) {
+        const filePath = errEntry.filePath!;
+        if (signal?.aborted) break;
+
+        let content: string;
+        try {
+          const fullPath = validatePathWithinRoot(this.rootDir, filePath);
+          if (!fullPath) continue;
+          content = await fsp.readFile(fullPath, 'utf-8');
+        } catch {
+          continue; // Skip files we can't read
+        }
+
+        let result: ExtractionResult;
+        try {
+          result = await requestParse(filePath, content);
+        } catch {
+          continue; // Still failing — leave as errored
+        }
+
+        if (result.nodes.length > 0 || result.errors.length === 0) {
+          // Success on retry — store result and fix counts
+          const language = detectLanguage(filePath);
+          const stats = await fsp.stat(path.join(this.rootDir, filePath));
+          this.storeExtractionResult(filePath, content, language, stats, result);
+
+          // Remove the original error and update counts
+          const idx = errors.indexOf(errEntry);
+          if (idx >= 0) errors.splice(idx, 1);
+          filesErrored--;
+          filesIndexed++;
+          totalNodes += result.nodes.length;
+          totalEdges += result.edges.length;
+          log(`Retry OK: ${filePath} (${result.nodes.length} nodes)`);
         }
       }
     }
