@@ -45,6 +45,7 @@ We tested the same exploration queries across 4 real-world codebases in differen
 | **Claude Code** | Python + Rust | "How does tool execution work end to end?" | 3 calls, 39s | 40 calls, 1m 8s | **93% fewer** | **43% faster** |
 | **Claude Code** | Java | "How does tool execution work end to end?" | 1 call, 19s | 26 calls, 1m 22s | **96% fewer** | **77% faster** |
 | **Alamofire** | Swift | "Trace how a request flows from Session.request() through to the URLSession layer" | 3 calls, 22s | 32 calls, 1m 39s | **91% fewer** | **78% faster** |
+| **Swift Compiler** | Swift/C++ | "How does the Swift compiler handle error diagnostics?" | 6 calls, 35s | 37 calls, 2m 8s | **84% fewer** | **73% faster** |
 
 <details>
 <summary><strong>Full benchmark details</strong></summary>
@@ -59,6 +60,7 @@ All tests used Claude Opus 4.6 (1M context) with Claude Code v2.1.91. Each test 
 | Claude Code (Python+Rust) | 115 | 3,080 | 3 | 67.1k | 39s | 0 |
 | Claude Code (Java) | — | — | 1 | 40.8k | 19s | 0 |
 | Alamofire (Swift) | 102 | 2,624 | 3 | 57.3k | 22s | 0 |
+| Swift Compiler (Swift/C++) | 25,874 | 272,898 | 6 | 77.4k | 35s | 0 |
 
 **Without CodeGraph — the agent uses grep, find, ls, and Read extensively:**
 | Codebase | Tool Uses | Tokens | Time | File Reads |
@@ -68,6 +70,7 @@ All tests used Claude Opus 4.6 (1M context) with Claude Code v2.1.91. Each test 
 | Claude Code (Python+Rust) | 40 | 69.3k | 1m 8s | ~15 |
 | Claude Code (Java) | 26 | 73.3k | 1m 22s | ~15 |
 | Alamofire (Swift) | 32 | 52.4k | 1m 39s | ~10 |
+| Swift Compiler (Swift/C++) | 37 | 99.1k | 2m 8s | ~20 |
 
 **Key observations:**
 - With CodeGraph, the agent **never fell back to reading files** — it trusted the codegraph_explore results completely
@@ -75,6 +78,7 @@ All tests used Claude Opus 4.6 (1M context) with Claude Code v2.1.91. Each test 
 - The Java codebase needed only **1 codegraph_explore call** to answer the entire question
 - Cross-language queries (Python+Rust) worked seamlessly — CodeGraph's graph traversal found connections across language boundaries
 - The Swift benchmark (Alamofire) traced a **9-step call chain** from `Session.request()` to `URLSession.dataTask()` — CodeGraph's graph traversal at depth 3 captured the full chain in one explore call
+- The **Swift Compiler** benchmark is the largest codebase tested (**25,874 files, 272,898 nodes**) — CodeGraph indexed it in under 4 minutes and the agent answered a complex cross-cutting question with **6 explore calls and zero file reads** in 35 seconds
 
 </details>
 
@@ -258,7 +262,7 @@ CodeGraph builds a semantic knowledge graph of codebases for faster, smarter cod
 > This project has CodeGraph initialized (.codegraph/ exists). Use `codegraph_explore` as your PRIMARY tool — it returns full source code sections from all relevant files in one call.
 >
 > **Rules:**
-> 1. Make at most 3 `codegraph_explore` calls — one broad query, then up to 2 focused follow-ups.
+> 1. Make at most 6 `codegraph_explore` calls — one broad query, then up to 5 focused follow-ups.
 > 2. Do NOT re-read files that codegraph_explore already returned source code for. The source sections are complete and authoritative.
 > 3. Only fall back to grep/glob/read for files listed under "Additional relevant files" if you need more detail, or if codegraph returned no results.
 
