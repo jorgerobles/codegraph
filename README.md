@@ -36,21 +36,33 @@ When you ask Claude Code to work on a complex task, it spawns **Explore agents**
 
 ### 📊 Benchmark Results
 
-We tested the same exploration queries across 4 real-world codebases in different languages, comparing Claude Code's Explore agent **with** and **without** CodeGraph:
+We tested exploration queries across 6 real-world codebases in different languages, comparing Claude Code's Explore agent **with** and **without** CodeGraph:
 
-| Codebase | Language | Query | With CG | Without CG | Tool Calls | Time Saved |
-|----------|----------|-------|---------|-----------|------------|------------|
-| **VS Code** | TypeScript | "How does the extension host communicate with the main process?" | 3 calls, 17s | 52 calls, 1m 37s | **94% fewer** | **82% faster** |
-| **Excalidraw** | TypeScript | "How does collaborative editing and real-time sync work?" | 3 calls, 29s | 47 calls, 1m 45s | **94% fewer** | **72% faster** |
-| **Claude Code** | Python + Rust | "How does tool execution work end to end?" | 3 calls, 39s | 40 calls, 1m 8s | **93% fewer** | **43% faster** |
-| **Claude Code** | Java | "How does tool execution work end to end?" | 1 call, 19s | 26 calls, 1m 22s | **96% fewer** | **77% faster** |
-| **Alamofire** | Swift | "Trace how a request flows from Session.request() through to the URLSession layer" | 3 calls, 22s | 32 calls, 1m 39s | **91% fewer** | **78% faster** |
-| **Swift Compiler** | Swift/C++ | "How does the Swift compiler handle error diagnostics?" | 6 calls, 35s | 37 calls, 2m 8s | **84% fewer** | **73% faster** |
+> **Average: 92% fewer tool calls · 71% faster**
+
+| Codebase | With CG | Without CG | Improvement |
+|----------|---------|------------|-------------|
+| **VS Code** · TypeScript | 3 calls, 17s | 52 calls, 1m 37s | **94% fewer · 82% faster** |
+| **Excalidraw** · TypeScript | 3 calls, 29s | 47 calls, 1m 45s | **94% fewer · 72% faster** |
+| **Claude Code** · Python + Rust | 3 calls, 39s | 40 calls, 1m 8s | **93% fewer · 43% faster** |
+| **Claude Code** · Java | 1 call, 19s | 26 calls, 1m 22s | **96% fewer · 77% faster** |
+| **Alamofire** · Swift | 3 calls, 22s | 32 calls, 1m 39s | **91% fewer · 78% faster** |
+| **Swift Compiler** · Swift/C++ | 6 calls, 35s | 37 calls, 2m 8s | **84% fewer · 73% faster** |
 
 <details>
 <summary><strong>Full benchmark details</strong></summary>
 
 All tests used Claude Opus 4.6 (1M context) with Claude Code v2.1.91. Each test spawned a single Explore agent with the same question.
+
+**Queries used:**
+| Codebase | Query |
+|----------|-------|
+| VS Code | "How does the extension host communicate with the main process?" |
+| Excalidraw | "How does collaborative editing and real-time sync work?" |
+| Claude Code (Python+Rust) | "How does tool execution work end to end?" |
+| Claude Code (Java) | "How does tool execution work end to end?" |
+| Alamofire | "Trace how a request flows from Session.request() through to the URLSession layer" |
+| Swift Compiler | "How does the Swift compiler handle error diagnostics?" |
 
 **With CodeGraph — the agent uses `codegraph_explore` and stops:**
 | Codebase | Files Indexed | Nodes | Tool Uses | Tokens | Time | File Reads |
