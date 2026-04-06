@@ -20,9 +20,12 @@ export const STOP_WORDS = new Set([
   'every', 'how', 'what', 'where', 'when', 'who', 'which', 'why',
   'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'they',
   'show', 'give', 'tell',
-  'been', 'done', 'made', 'used', 'using', 'works', 'found',
+  'been', 'done', 'made', 'used', 'using', 'work', 'works', 'found',
   'also', 'into', 'then', 'than', 'just', 'more', 'some', 'such',
   'over', 'only', 'out', 'its', 'so', 'up', 'as', 'if',
+  'look', 'need', 'needs', 'want', 'happen', 'happens',
+  'affect', 'affected', 'break', 'breaks', 'failing',
+  'implemented', 'implement',
   // Code-specific noise (avoid filtering common symbol names like get/set/add/build/find/list)
   'code', 'file', 'files', 'function', 'method', 'class', 'type',
   'fix', 'bug', 'called',

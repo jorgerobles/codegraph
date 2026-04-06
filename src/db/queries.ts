@@ -489,11 +489,14 @@ export class QueryBuilder {
     }
 
     // Supplement: ensure exact name matches are always candidates.
-    // BM25 can bury short exact-match names (e.g. "Query") under hundreds of
-    // compound names (e.g. "QueryParserTokenManager") in large codebases,
+    // BM25 can bury short exact-match names (e.g. "getBean") under hundreds of
+    // compound names (e.g. "getBeanDescriptor") in large codebases,
     // pushing them past the FTS fetch limit before post-hoc scoring can help.
+    // Use the max BM25 score as the base so the nameMatchBonus (exact=30 vs
+    // prefix=20) actually differentiates them after rescoring.
     if (results.length > 0 && query) {
       const existingIds = new Set(results.map(r => r.node.id));
+      const maxFtsScore = Math.max(...results.map(r => r.score));
       const terms = query.split(/\s+/).filter(t => t.length >= 2);
       for (const term of terms) {
         let sql = 'SELECT * FROM nodes WHERE name = ? COLLATE NOCASE';
@@ -506,11 +509,11 @@ export class QueryBuilder {
           sql += ` AND language IN (${languages.map(() => '?').join(',')})`;
           params.push(...languages);
         }
-        sql += ' LIMIT 5';
+        sql += ' LIMIT 20';
         const rows = this.db.prepare(sql).all(...params) as NodeRow[];
         for (const row of rows) {
           if (!existingIds.has(row.id)) {
-            results.push({ node: rowToNode(row), score: 0 });
+            results.push({ node: rowToNode(row), score: maxFtsScore });
             existingIds.add(row.id);
           }
         }
