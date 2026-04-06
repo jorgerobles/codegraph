@@ -59,7 +59,7 @@ export const testCases: EvalTestCase[] = [
     id: 'explore-search-execution',
     query: 'How does search execution work from request to shard?',
     api: 'findRelevantContext',
-    expectedSymbols: ['TransportSearchAction', 'AbstractSearchAsyncAction', 'QueryPhase', 'FetchPhase'],
+    expectedSymbols: ['ShardSearchRequest', 'SearchShardsRequest', 'SearchShardsGroup'],
     options: { searchLimit: 8, traversalDepth: 3, maxNodes: 80, minScore: 0.2 },
   },
   {

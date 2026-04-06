@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import {
   Node,
   Edge,
@@ -476,17 +477,48 @@ export class ContextBuilder {
       }
     }
 
-    // Limit total results
-    searchResults = searchResults.slice(0, opts.searchLimit * 2);
-
-    // Deprioritize test files unless the query is about tests
     const queryLower = query.toLowerCase();
     const isTestQuery = queryLower.includes('test') || queryLower.includes('spec');
+
+    // Deprioritize test files early so they don't take multi-term boost slots
     if (!isTestQuery) {
-      searchResults = searchResults.map(r => ({
-        ...r,
-        score: isTestFile(r.node.filePath) ? r.score * 0.3 : r.score,
-      }));
+      for (const result of searchResults) {
+        if (isTestFile(result.node.filePath)) {
+          result.score *= 0.3;
+        }
+      }
+    }
+
+    // Step 5a: Multi-term co-occurrence re-ranking (applied BEFORE truncation).
+    // For multi-word queries like "search execution from request to shard",
+    // nodes matching 2+ query terms in their name or path are far more relevant
+    // than nodes matching just one generic term. Without this, "ExecutionUtils"
+    // (matches only "execution") fills budget slots meant for "ShardSearchRequest"
+    // (matches "shard" + "search" + "request").
+    const queryTermsForBoost = extractSearchTerms(query);
+    if (queryTermsForBoost.length >= 2) {
+      for (const result of searchResults) {
+        // Check term matches in name (substring) and path DIRECTORIES (exact).
+        // Directory segments must match exactly — "search" matches directory
+        // "search/" but NOT "elasticsearch/". The class name is checked
+        // separately via substring match on the node name.
+        const nameLower = result.node.name.toLowerCase();
+        const dirSegments = path.dirname(result.node.filePath).toLowerCase().split('/');
+        let matchCount = 0;
+        for (const term of queryTermsForBoost) {
+          const inName = nameLower.includes(term);
+          const inDir = dirSegments.some(seg => seg === term);
+          if (inName || inDir) matchCount++;
+        }
+        if (matchCount >= 2) {
+          // Multiplicative boost — 2 terms → 2x, 3 terms → 2.5x
+          result.score *= 1 + matchCount * 0.5;
+        } else {
+          // Dampen single-term matches — they matched a generic word
+          // (e.g., "Execution" or "Shard" alone) not the compound concept
+          result.score *= 0.3;
+        }
+      }
       searchResults.sort((a, b) => b.score - a.score);
     }
 
@@ -536,7 +568,12 @@ export class ContextBuilder {
         }
         termCandidates.sort((a, b) => b.score - a.score);
 
-        for (const r of termCandidates.slice(0, maxCamelPerTerm)) {
+        // Widen the per-term pool for accumulation so multi-term co-occurrences
+        // can be discovered. A class matching 3 query terms at CamelCase boundaries
+        // is far more relevant than one matching just 1, but it needs to survive
+        // the per-term cut for EACH term to accumulate its count.
+        const accumPerTerm = maxCamelPerTerm * 4;
+        for (const r of termCandidates.slice(0, accumPerTerm)) {
           const existing = camelNodeTerms.get(r.node.id);
           if (existing) {
             existing.termCount++;
@@ -561,7 +598,65 @@ export class ContextBuilder {
         searchResults.push(r);
         searchIdSet.add(r.node.id);
       }
+
+      // Step 5c: Compound term matching — find classes whose name contains 2+
+      // query terms at ANY position (not just CamelCase boundaries).
+      // The CamelCase step above requires idx > 0, which misses classes that
+      // START with a query term (e.g., "SearchShardsRequest" starts with "Search").
+      // For multi-word queries, a class matching multiple query terms in its name
+      // is almost certainly relevant regardless of position.
+      if (symbolsFromQuery.length >= 2) {
+        // Collect ALL LIKE results per term (reusing findNodesByNameSubstring)
+        // but without the CamelCase boundary or prefix exclusion filters.
+        const compoundTermMap = new Map<string, { node: Node; terms: Set<string> }>();
+        for (const sym of symbolsFromQuery) {
+          const titleCased = sym.charAt(0).toUpperCase() + sym.slice(1).toLowerCase();
+          if (titleCased.length < 3) continue;
+
+          const likeResults = this.queries.findNodesByNameSubstring(titleCased, {
+            limit: 200,
+            kinds: camelDefinitionKinds,
+            excludePrefix: false,
+          });
+
+          for (const r of likeResults) {
+            if (searchIdSet.has(r.node.id)) continue;
+            if (isTestFile(r.node.filePath) && !isTestQuery) continue;
+            const entry = compoundTermMap.get(r.node.id);
+            if (entry) {
+              entry.terms.add(titleCased);
+            } else {
+              compoundTermMap.set(r.node.id, { node: r.node, terms: new Set([titleCased]) });
+            }
+          }
+        }
+
+        // Keep only nodes matching 2+ distinct terms
+        const compoundResults: SearchResult[] = [];
+        for (const [, entry] of compoundTermMap) {
+          if (entry.terms.size >= 2) {
+            const pathScore = scorePathRelevance(entry.node.filePath, query);
+            const brevityBonus = Math.max(0, 6 - entry.node.name.length / 8);
+            compoundResults.push({
+              node: entry.node,
+              score: 10 + (entry.terms.size - 1) * 20 + pathScore + brevityBonus,
+            });
+          }
+        }
+        compoundResults.sort((a, b) => b.score - a.score);
+        const maxCompound = Math.ceil(opts.searchLimit / 2);
+        for (const r of compoundResults.slice(0, maxCompound)) {
+          searchResults.push(r);
+          searchIdSet.add(r.node.id);
+        }
+      }
     }
+
+    // Final sort and truncation — all search channels (exact, text, CamelCase,
+    // compound) have now contributed. Sort by score so multi-term matches from
+    // later steps can outrank dampened single-term matches from earlier steps.
+    searchResults.sort((a, b) => b.score - a.score);
+    searchResults = searchResults.slice(0, opts.searchLimit * 3);
 
     // Filter by minimum score
     let filteredResults = searchResults.filter((r) => r.score >= opts.minScore);
