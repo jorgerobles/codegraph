@@ -29,6 +29,70 @@ export const STOP_WORDS = new Set([
 ]);
 
 /**
+ * Generate stem variants of a search term by removing common English suffixes.
+ * Used for FTS query expansion so "caching" also finds "cache", "eviction" finds "evict", etc.
+ * Stems are used as PREFIX matches in FTS, so they don't need to be perfect English words.
+ */
+export function getStemVariants(term: string): string[] {
+  const variants = new Set<string>();
+  const t = term.toLowerCase();
+
+  // -ing: caching→cach/cache, handling→handl/handle, running→run
+  if (t.endsWith('ing') && t.length > 5) {
+    const base = t.slice(0, -3);
+    variants.add(base);
+    variants.add(base + 'e');
+    if (base.length >= 2 && base[base.length - 1] === base[base.length - 2]) {
+      variants.add(base.slice(0, -1));
+    }
+  }
+
+  // -tion/-sion: eviction→evict, expression→express
+  if ((t.endsWith('tion') || t.endsWith('sion')) && t.length > 5) {
+    variants.add(t.slice(0, -3));
+  }
+
+  // -ment: management→manage
+  if (t.endsWith('ment') && t.length > 6) {
+    variants.add(t.slice(0, -4));
+  }
+
+  // -ies: entries→entry
+  if (t.endsWith('ies') && t.length > 4) {
+    variants.add(t.slice(0, -3) + 'y');
+  }
+  // -es: processes→process, classes→class
+  else if (t.endsWith('es') && t.length > 4) {
+    variants.add(t.slice(0, -2));
+  }
+  // -s: errors→error (skip -ss endings like "class")
+  else if (t.endsWith('s') && !t.endsWith('ss') && t.length > 4) {
+    variants.add(t.slice(0, -1));
+  }
+
+  // -ed: handled→handle, propagated→propagate, carried→carry
+  if (t.endsWith('ed') && !t.endsWith('eed') && t.length > 4) {
+    variants.add(t.slice(0, -1));
+    variants.add(t.slice(0, -2));
+    if (t.endsWith('ied') && t.length > 5) {
+      variants.add(t.slice(0, -3) + 'y');
+    }
+  }
+
+  // -er: builder→build/builde, handler→handl/handle, getter→get
+  if (t.endsWith('er') && t.length > 4) {
+    const base = t.slice(0, -2);
+    variants.add(base);
+    variants.add(base + 'e');
+    if (base.length >= 2 && base[base.length - 1] === base[base.length - 2]) {
+      variants.add(base.slice(0, -1));
+    }
+  }
+
+  return [...variants].filter(v => v.length >= 3 && v !== t);
+}
+
+/**
  * Extract meaningful search terms from a natural language query.
  * Splits camelCase, PascalCase, snake_case, SCREAMING_SNAKE, and dot.notation
  * into individual tokens before filtering.
@@ -36,6 +100,9 @@ export const STOP_WORDS = new Set([
  * Preserves original compound identifiers (e.g., "scrapeLoop") alongside
  * their split parts so that FTS can match both the full symbol name and
  * individual words within it.
+ *
+ * Also generates stem variants (e.g., "caching"→"cache", "eviction"→"evict")
+ * so FTS prefix matching can find related code symbols.
  */
 export function extractSearchTerms(query: string): string[] {
   const tokens = new Set<string>();
@@ -74,6 +141,21 @@ export function extractSearchTerms(query: string): string[] {
     if (lower.length < 3) continue;
     if (STOP_WORDS.has(lower)) continue;
     tokens.add(lower);
+  }
+
+  // Generate stem variants for broader FTS matching.
+  // "caching" → "cache" finds CacheBuilder; "eviction" → "evict" finds evictEntries.
+  // Also enables co-occurrence dampening by increasing term count above 1.
+  const stems = new Set<string>();
+  for (const token of tokens) {
+    for (const variant of getStemVariants(token)) {
+      if (!tokens.has(variant) && !STOP_WORDS.has(variant)) {
+        stems.add(variant);
+      }
+    }
+  }
+  for (const stem of stems) {
+    tokens.add(stem);
   }
 
   return [...tokens];
@@ -133,10 +215,14 @@ export function isTestFile(filePath: string): boolean {
     fileName.endsWith('_test.rs') ||
     fileName.endsWith('Tests.java') ||
     fileName.endsWith('Test.java') ||
+    fileName.endsWith('Tester.java') ||
+    fileName.endsWith('TestCase.java') ||
     lower.includes('/tests/') ||
     lower.includes('/test/') ||
     lower.includes('/__tests__/') ||
-    lower.includes('/spec/')
+    lower.includes('/spec/') ||
+    lower.includes('/testlib/') ||
+    lower.includes('/testing/')
   );
 }
 

@@ -26,7 +26,7 @@ import { VectorManager } from '../vectors';
 import { formatContextAsMarkdown, formatContextAsJson } from './formatter';
 import { logDebug } from '../errors';
 import { validatePathWithinRoot } from '../utils';
-import { isTestFile, extractSearchTerms, scorePathRelevance } from '../search/query-utils';
+import { isTestFile, extractSearchTerms, scorePathRelevance, getStemVariants } from '../search/query-utils';
 
 /**
  * Extract likely symbol names from a natural language query
@@ -352,10 +352,18 @@ export class ContextBuilder {
     // Step 2b: Search for extracted symbols as definition (class/interface) prefixes.
     // When the user writes "REST", "bulk", or "allocation", they usually mean classes
     // like RestController, BulkRequest, AllocationService — not nodes named exactly that.
+    // Also tries stem variants: "caching" → "cache" finds Cache, CacheBuilder.
     if (symbolsFromQuery.length > 0) {
       const definitionKinds: NodeKind[] = ['class', 'interface', 'struct', 'trait',
         'protocol', 'enum', 'type_alias'];
+      // Expand symbols with stem variants for broader definition matching
+      const expandedSymbols = new Set(symbolsFromQuery);
       for (const sym of symbolsFromQuery) {
+        for (const variant of getStemVariants(sym)) {
+          expandedSymbols.add(variant);
+        }
+      }
+      for (const sym of expandedSymbols) {
         // Title-case the symbol: "REST" → "Rest", "bulk" → "Bulk", "allocation" → "Allocation"
         const titleCased = sym.charAt(0).toUpperCase() + sym.slice(1).toLowerCase();
         if (titleCased === sym) continue; // already title-case (e.g., "Engine") — handled by exact match
