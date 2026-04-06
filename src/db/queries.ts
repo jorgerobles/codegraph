@@ -178,6 +178,7 @@ export class QueryBuilder {
     getUnresolvedCount?: SqliteStatement;
     getUnresolvedBatch?: SqliteStatement;
     getAllFilePaths?: SqliteStatement;
+    getAllNodeNames?: SqliteStatement;
   } = {};
 
   constructor(db: SqliteDatabase) {
@@ -974,6 +975,17 @@ export class QueryBuilder {
     }
     const rows = this.stmts.getAllFilePaths.all() as Array<{ path: string }>;
     return rows.map((r) => r.path);
+  }
+
+  /**
+   * Get all distinct node names (lightweight — just name strings for pre-filtering)
+   */
+  getAllNodeNames(): string[] {
+    if (!this.stmts.getAllNodeNames) {
+      this.stmts.getAllNodeNames = this.db.prepare('SELECT DISTINCT name FROM nodes');
+    }
+    const rows = this.stmts.getAllNodeNames.all() as Array<{ name: string }>;
+    return rows.map((r) => r.name);
   }
 
   /**

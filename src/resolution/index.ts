@@ -24,6 +24,91 @@ import { logDebug } from '../errors';
 // Re-export types
 export * from './types';
 
+// Pre-built Sets for O(1) built-in lookups (allocated once, shared across all instances)
+const JS_BUILT_INS = new Set([
+  'console', 'window', 'document', 'global', 'process',
+  'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean',
+  'Date', 'Math', 'JSON', 'RegExp', 'Error', 'Map', 'Set',
+  'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+  'fetch', 'require', 'module', 'exports', '__dirname', '__filename',
+]);
+
+const REACT_HOOKS = new Set([
+  'useState', 'useEffect', 'useContext', 'useReducer', 'useCallback',
+  'useMemo', 'useRef', 'useLayoutEffect', 'useImperativeHandle', 'useDebugValue',
+]);
+
+const PYTHON_BUILT_INS = new Set([
+  'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
+  'open', 'input', 'type', 'isinstance', 'hasattr', 'getattr', 'setattr',
+  'super', 'self', 'cls', 'None', 'True', 'False',
+]);
+
+const PYTHON_BUILT_IN_TYPES = new Set([
+  'list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool',
+  'bytes', 'bytearray', 'frozenset', 'object', 'super',
+]);
+
+const PYTHON_BUILT_IN_METHODS = new Set([
+  'append', 'extend', 'insert', 'remove', 'pop', 'clear', 'sort', 'reverse', 'copy',
+  'update', 'keys', 'values', 'items', 'get',
+  'add', 'discard', 'union', 'intersection', 'difference',
+  'split', 'join', 'strip', 'lstrip', 'rstrip', 'replace', 'lower', 'upper',
+  'startswith', 'endswith', 'find', 'index', 'count', 'encode', 'decode',
+  'format', 'isdigit', 'isalpha', 'isalnum',
+  'read', 'write', 'readline', 'readlines', 'close', 'flush', 'seek',
+]);
+
+const GO_STDLIB_PACKAGES = new Set([
+  'fmt', 'os', 'io', 'net', 'http', 'log', 'math', 'sort', 'sync',
+  'time', 'path', 'bytes', 'strings', 'strconv', 'errors', 'context',
+  'json', 'xml', 'csv', 'html', 'template', 'regexp', 'reflect',
+  'runtime', 'testing', 'flag', 'bufio', 'crypto', 'encoding',
+  'filepath', 'hash', 'mime', 'rand', 'signal', 'sql', 'syscall',
+  'unicode', 'unsafe', 'atomic', 'binary', 'debug', 'exec', 'heap',
+  'ring', 'scanner', 'tar', 'zip', 'gzip', 'zlib', 'tls', 'url',
+  'user', 'pprof', 'trace', 'ast', 'build', 'parser', 'printer',
+  'token', 'types', 'cgo', 'plugin', 'race', 'ioutil',
+  // Kubernetes-common stdlib aliases
+  'utilruntime', 'utilwait', 'utilnet',
+]);
+
+const GO_BUILT_INS = new Set([
+  'make', 'new', 'len', 'cap', 'append', 'copy', 'delete', 'close',
+  'panic', 'recover', 'print', 'println', 'complex', 'real', 'imag',
+  'error', 'nil', 'true', 'false', 'iota',
+  'int', 'int8', 'int16', 'int32', 'int64',
+  'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'uintptr',
+  'float32', 'float64', 'complex64', 'complex128',
+  'string', 'bool', 'byte', 'rune', 'any',
+]);
+
+const PASCAL_UNIT_PREFIXES = [
+  'System.', 'Winapi.', 'Vcl.', 'Fmx.', 'Data.', 'Datasnap.',
+  'Soap.', 'Xml.', 'Web.', 'REST.', 'FireDAC.', 'IBX.',
+  'IdHTTP', 'IdTCP', 'IdSSL',
+];
+
+const PASCAL_BUILT_INS = new Set([
+  'System', 'SysUtils', 'Classes', 'Types', 'Variants', 'StrUtils',
+  'Math', 'DateUtils', 'IOUtils', 'Generics.Collections', 'Generics.Defaults',
+  'Rtti', 'TypInfo', 'SyncObjs', 'RegularExpressions',
+  'SysInit', 'Windows', 'Messages', 'Graphics', 'Controls', 'Forms',
+  'Dialogs', 'StdCtrls', 'ExtCtrls', 'ComCtrls', 'Menus', 'ActnList',
+  'WriteLn', 'Write', 'ReadLn', 'Read', 'Inc', 'Dec', 'Ord', 'Chr',
+  'Length', 'SetLength', 'High', 'Low', 'Assigned', 'FreeAndNil',
+  'Format', 'IntToStr', 'StrToInt', 'FloatToStr', 'StrToFloat',
+  'Trim', 'UpperCase', 'LowerCase', 'Pos', 'Copy', 'Delete', 'Insert',
+  'Now', 'Date', 'Time', 'DateToStr', 'StrToDate',
+  'Raise', 'Exit', 'Break', 'Continue', 'Abort',
+  'True', 'False', 'nil', 'Self', 'Result',
+  'Create', 'Destroy', 'Free',
+  'TObject', 'TComponent', 'TPersistent', 'TInterfacedObject',
+  'TList', 'TStringList', 'TStrings', 'TStream', 'TMemoryStream', 'TFileStream',
+  'Exception', 'EAbort', 'EConvertError', 'EAccessViolation',
+  'IInterface', 'IUnknown',
+]);
+
 /**
  * Reference Resolver
  *
@@ -37,6 +122,10 @@ export class ReferenceResolver {
   private nodeCache: Map<string, Node[]> = new Map(); // per-file node cache (bounded)
   private fileCache: Map<string, string | null> = new Map(); // per-file content cache (bounded)
   private importMappingCache: Map<string, ImportMapping[]> = new Map();
+  private nameCache: Map<string, Node[]> = new Map(); // name → nodes cache
+  private lowerNameCache: Map<string, Node[]> = new Map(); // lower(name) → nodes cache
+  private qualifiedNameCache: Map<string, Node[]> = new Map(); // qualified_name → nodes cache
+  private knownNames: Set<string> | null = null; // all known symbol names for fast pre-filtering
   private knownFiles: Set<string> | null = null;
   private cachesWarmed = false;
 
@@ -58,12 +147,16 @@ export class ReferenceResolver {
    * Pre-build lightweight caches for resolution.
    * Node lookups are now handled by indexed SQLite queries instead of
    * loading all nodes into memory (which caused OOM on large codebases).
+   * We cache the set of known symbol names for fast pre-filtering.
    */
   warmCaches(): void {
     if (this.cachesWarmed) return;
 
     // Only cache the set of known file paths (lightweight string set)
     this.knownFiles = new Set(this.queries.getAllFilePaths());
+
+    // Cache all distinct symbol names for fast pre-filtering (just strings, not full nodes)
+    this.knownNames = new Set(this.queries.getAllNodeNames());
 
     this.cachesWarmed = true;
   }
@@ -75,6 +168,10 @@ export class ReferenceResolver {
     this.nodeCache.clear();
     this.fileCache.clear();
     this.importMappingCache.clear();
+    this.nameCache.clear();
+    this.lowerNameCache.clear();
+    this.qualifiedNameCache.clear();
+    this.knownNames = null;
     this.knownFiles = null;
     this.cachesWarmed = false;
   }
@@ -92,11 +189,19 @@ export class ReferenceResolver {
       },
 
       getNodesByName: (name: string) => {
-        return this.queries.getNodesByName(name);
+        const cached = this.nameCache.get(name);
+        if (cached !== undefined) return cached;
+        const result = this.queries.getNodesByName(name);
+        this.nameCache.set(name, result);
+        return result;
       },
 
       getNodesByQualifiedName: (qualifiedName: string) => {
-        return this.queries.getNodesByQualifiedNameExact(qualifiedName);
+        const cached = this.qualifiedNameCache.get(qualifiedName);
+        if (cached !== undefined) return cached;
+        const result = this.queries.getNodesByQualifiedNameExact(qualifiedName);
+        this.qualifiedNameCache.set(qualifiedName, result);
+        return result;
       },
 
       getNodesByKind: (kind: Node['kind']) => {
@@ -145,7 +250,11 @@ export class ReferenceResolver {
       },
 
       getNodesByLowerName: (lowerName: string) => {
-        return this.queries.getNodesByLowerName(lowerName);
+        const cached = this.lowerNameCache.get(lowerName);
+        if (cached !== undefined) return cached;
+        const result = this.queries.getNodesByLowerName(lowerName);
+        this.lowerNameCache.set(lowerName, result);
+        return result;
       },
 
       getImportMappings: (filePath: string, language) => {
@@ -233,11 +342,47 @@ export class ReferenceResolver {
   }
 
   /**
+   * Check if a reference name has any possible match in the codebase.
+   * Uses the pre-built knownNames set to skip expensive resolution
+   * for names that definitely don't exist as symbols.
+   */
+  private hasAnyPossibleMatch(name: string): boolean {
+    if (!this.knownNames) return true; // no pre-filter available
+
+    // Direct name match
+    if (this.knownNames.has(name)) return true;
+
+    // For qualified names like "obj.method" or "Class::method", check the parts
+    const dotIdx = name.indexOf('.');
+    if (dotIdx > 0) {
+      const receiver = name.substring(0, dotIdx);
+      const member = name.substring(dotIdx + 1);
+      if (this.knownNames.has(receiver) || this.knownNames.has(member)) return true;
+      // Also check capitalized receiver (instance-method resolution)
+      const capitalized = receiver.charAt(0).toUpperCase() + receiver.slice(1);
+      if (this.knownNames.has(capitalized)) return true;
+    }
+    const colonIdx = name.indexOf('::');
+    if (colonIdx > 0) {
+      const receiver = name.substring(0, colonIdx);
+      const member = name.substring(colonIdx + 2);
+      if (this.knownNames.has(receiver) || this.knownNames.has(member)) return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Resolve a single reference
    */
   resolveOne(ref: UnresolvedRef): ResolvedRef | null {
     // Skip built-in/external references
     if (this.isBuiltInOrExternal(ref)) {
+      return null;
+    }
+
+    // Fast pre-filter: skip if no symbol with this name exists anywhere
+    if (!this.hasAnyPossibleMatch(ref.referenceName)) {
       return null;
     }
 
@@ -419,15 +564,7 @@ export class ReferenceResolver {
     const name = ref.referenceName;
 
     // JavaScript/TypeScript built-ins
-    const jsBuiltIns = [
-      'console', 'window', 'document', 'global', 'process',
-      'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean',
-      'Date', 'Math', 'JSON', 'RegExp', 'Error', 'Map', 'Set',
-      'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-      'fetch', 'require', 'module', 'exports', '__dirname', '__filename',
-    ];
-
-    if (jsBuiltIns.includes(name)) {
+    if (JS_BUILT_INS.has(name)) {
       return true;
     }
 
@@ -437,19 +574,12 @@ export class ReferenceResolver {
     }
 
     // React hooks from React itself
-    const reactHooks = ['useState', 'useEffect', 'useContext', 'useReducer', 'useCallback', 'useMemo', 'useRef', 'useLayoutEffect', 'useImperativeHandle', 'useDebugValue'];
-    if (reactHooks.includes(name)) {
+    if (REACT_HOOKS.has(name)) {
       return true;
     }
 
     // Python built-ins
-    const pythonBuiltIns = [
-      'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
-      'open', 'input', 'type', 'isinstance', 'hasattr', 'getattr', 'setattr',
-      'super', 'self', 'cls', 'None', 'True', 'False',
-    ];
-
-    if (ref.language === 'python' && pythonBuiltIns.includes(name)) {
+    if (ref.language === 'python' && PYTHON_BUILT_INS.has(name)) {
       return true;
     }
 
@@ -458,66 +588,35 @@ export class ReferenceResolver {
       const dotIdx = name.indexOf('.');
       if (dotIdx > 0) {
         const receiver = name.substring(0, dotIdx);
-        // self.method and cls.method are internal calls, not built-in — let them resolve
-        // But receiver types that are built-in types should be filtered
-        const pythonBuiltInTypes = new Set([
-          'list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool',
-          'bytes', 'bytearray', 'frozenset', 'object', 'super',
-        ]);
-        if (pythonBuiltInTypes.has(receiver)) {
+        if (PYTHON_BUILT_IN_TYPES.has(receiver)) {
           return true;
         }
       }
-      // Also filter bare method names that are common Python built-in methods
-      // These get extracted as unresolved refs when called on arbitrary objects
-      const pythonBuiltInMethods = new Set([
-        'append', 'extend', 'insert', 'remove', 'pop', 'clear', 'sort', 'reverse', 'copy',
-        'update', 'keys', 'values', 'items', 'get',
-        'add', 'discard', 'union', 'intersection', 'difference',
-        'split', 'join', 'strip', 'lstrip', 'rstrip', 'replace', 'lower', 'upper',
-        'startswith', 'endswith', 'find', 'index', 'count', 'encode', 'decode',
-        'format', 'isdigit', 'isalpha', 'isalnum',
-        'read', 'write', 'readline', 'readlines', 'close', 'flush', 'seek',
-      ]);
-      if (pythonBuiltInMethods.has(name)) {
+      if (PYTHON_BUILT_IN_METHODS.has(name)) {
+        return true;
+      }
+    }
+
+    // Go standard library packages — refs like "fmt.Println", "http.ListenAndServe", etc.
+    if (ref.language === 'go') {
+      const dotIdx = name.indexOf('.');
+      if (dotIdx > 0) {
+        const pkg = name.substring(0, dotIdx);
+        if (GO_STDLIB_PACKAGES.has(pkg)) {
+          return true;
+        }
+      }
+      if (GO_BUILT_INS.has(name)) {
         return true;
       }
     }
 
     // Pascal/Delphi built-ins and standard library units
     if (ref.language === 'pascal') {
-      // Standard RTL/VCL/FMX unit prefixes — these are external dependencies
-      const pascalUnitPrefixes = [
-        'System.', 'Winapi.', 'Vcl.', 'Fmx.', 'Data.', 'Datasnap.',
-        'Soap.', 'Xml.', 'Web.', 'REST.', 'FireDAC.', 'IBX.',
-        'IdHTTP', 'IdTCP', 'IdSSL',
-      ];
-      if (pascalUnitPrefixes.some((p) => name.startsWith(p))) {
+      if (PASCAL_UNIT_PREFIXES.some((p) => name.startsWith(p))) {
         return true;
       }
-
-      // Common standalone RTL units and built-in identifiers
-      const pascalBuiltIns = [
-        'System', 'SysUtils', 'Classes', 'Types', 'Variants', 'StrUtils',
-        'Math', 'DateUtils', 'IOUtils', 'Generics.Collections', 'Generics.Defaults',
-        'Rtti', 'TypInfo', 'SyncObjs', 'RegularExpressions',
-        'SysInit', 'Windows', 'Messages', 'Graphics', 'Controls', 'Forms',
-        'Dialogs', 'StdCtrls', 'ExtCtrls', 'ComCtrls', 'Menus', 'ActnList',
-        'WriteLn', 'Write', 'ReadLn', 'Read', 'Inc', 'Dec', 'Ord', 'Chr',
-        'Length', 'SetLength', 'High', 'Low', 'Assigned', 'FreeAndNil',
-        'Format', 'IntToStr', 'StrToInt', 'FloatToStr', 'StrToFloat',
-        'Trim', 'UpperCase', 'LowerCase', 'Pos', 'Copy', 'Delete', 'Insert',
-        'Now', 'Date', 'Time', 'DateToStr', 'StrToDate',
-        'Raise', 'Exit', 'Break', 'Continue', 'Abort',
-        'True', 'False', 'nil', 'Self', 'Result',
-        'Create', 'Destroy', 'Free',
-        'TObject', 'TComponent', 'TPersistent', 'TInterfacedObject',
-        'TList', 'TStringList', 'TStrings', 'TStream', 'TMemoryStream', 'TFileStream',
-        'Exception', 'EAbort', 'EConvertError', 'EAccessViolation',
-        'IInterface', 'IUnknown',
-      ];
-
-      if (pascalBuiltIns.includes(name)) {
+      if (PASCAL_BUILT_INS.has(name)) {
         return true;
       }
     }
