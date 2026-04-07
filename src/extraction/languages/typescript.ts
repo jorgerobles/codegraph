@@ -15,6 +15,35 @@ export const typescriptExtractor: LanguageExtractor = {
   variableTypes: ['lexical_declaration', 'variable_declaration'],
   nameField: 'name',
   bodyField: 'body',
+  resolveBody: (node, bodyField) => {
+    // public_field_definition (arrow function class fields) nest the body inside
+    // an arrow_function or function_expression child:
+    //   public_field_definition → arrow_function → body (statement_block)
+    // Also handles wrapper patterns like: field = withBatchedUpdates((e) => { ... })
+    //   public_field_definition → call_expression → arguments → arrow_function → body
+    if (node.type === 'public_field_definition') {
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (!child) continue;
+        if (child.type === 'arrow_function' || child.type === 'function_expression') {
+          return getChildByField(child, bodyField);
+        }
+        // Check inside call_expression arguments (HOF wrappers like throttle, debounce)
+        if (child.type === 'call_expression') {
+          const args = getChildByField(child, 'arguments');
+          if (args) {
+            for (let j = 0; j < args.namedChildCount; j++) {
+              const arg = args.namedChild(j);
+              if (arg && (arg.type === 'arrow_function' || arg.type === 'function_expression')) {
+                return getChildByField(arg, bodyField);
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  },
   paramsField: 'parameters',
   returnField: 'return_type',
   getSignature: (node, source) => {
