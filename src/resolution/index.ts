@@ -422,17 +422,32 @@ export class ReferenceResolver {
    * Create edges from resolved references
    */
   createEdges(resolved: ResolvedRef[]): Edge[] {
-    return resolved.map((ref) => ({
-      source: ref.original.fromNodeId,
-      target: ref.targetNodeId,
-      kind: ref.original.referenceKind,
-      line: ref.original.line,
-      column: ref.original.column,
-      metadata: {
-        confidence: ref.confidence,
-        resolvedBy: ref.resolvedBy,
-      },
-    }));
+    return resolved.map((ref) => {
+      let kind = ref.original.referenceKind;
+
+      // Promote "extends" to "implements" when a class/struct targets an interface
+      if (kind === 'extends') {
+        const targetNode = this.queries.getNodeById(ref.targetNodeId);
+        if (targetNode && (targetNode.kind === 'interface' || targetNode.kind === 'protocol')) {
+          const sourceNode = this.queries.getNodeById(ref.original.fromNodeId);
+          if (sourceNode && sourceNode.kind !== 'interface' && sourceNode.kind !== 'protocol') {
+            kind = 'implements';
+          }
+        }
+      }
+
+      return {
+        source: ref.original.fromNodeId,
+        target: ref.targetNodeId,
+        kind,
+        line: ref.original.line,
+        column: ref.original.column,
+        metadata: {
+          confidence: ref.confidence,
+          resolvedBy: ref.resolvedBy,
+        },
+      };
+    });
   }
 
   /**
