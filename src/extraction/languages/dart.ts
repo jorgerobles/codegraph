@@ -12,7 +12,7 @@ export const dartExtractor: LanguageExtractor = {
   enumMemberTypes: ['enum_constant'],
   typeAliasTypes: ['type_alias'],
   importTypes: ['import_or_export'],
-  callTypes: [],  // Dart calls use identifier+selector, handled via function body traversal
+  callTypes: [],  // Dart calls use identifier+selector, handled via extractBareCall
   variableTypes: [],
   extraClassNodeTypes: ['mixin_declaration', 'extension_declaration'],
   resolveBody: (node, bodyField) => {
@@ -131,5 +131,65 @@ export const dartExtractor: LanguageExtractor = {
       return { moduleName, signature: importText };
     }
     return null;
+  },
+  extractBareCall: (node, _source) => {
+    // Dart calls are: identifier + selector(argument_part), not a dedicated call node.
+    // Match on selector nodes that contain argument_part.
+    if (node.type === 'selector') {
+      const hasArgPart = node.namedChildren.some((c: SyntaxNode) => c.type === 'argument_part');
+      if (!hasArgPart) return undefined;
+
+      const prev = node.previousNamedSibling;
+      if (!prev) return undefined;
+
+      // Simple function/constructor call: prev is identifier (e.g., runApp(...), MyWidget(...))
+      if (prev.type === 'identifier') {
+        return prev.text;
+      }
+
+      // Method call: prev is selector with accessor (e.g., obj.method(...), Navigator.push(...))
+      if (prev.type === 'selector') {
+        const accessor = prev.namedChildren.find((c: SyntaxNode) =>
+          c.type === 'unconditional_assignable_selector' || c.type === 'conditional_assignable_selector'
+        );
+        if (accessor) {
+          const methodId = accessor.namedChildren.find((c: SyntaxNode) => c.type === 'identifier');
+          if (methodId) {
+            // Include receiver for first call in chain (receiver is a direct identifier)
+            const accessorPrev = prev.previousNamedSibling;
+            if (accessorPrev?.type === 'identifier') {
+              return accessorPrev.text + '.' + methodId.text;
+            }
+            return methodId.text;
+          }
+        }
+      }
+
+      // super.method() / this.method(): prev is bare unconditional_assignable_selector
+      if (prev.type === 'unconditional_assignable_selector' || prev.type === 'conditional_assignable_selector') {
+        const methodId = prev.namedChildren.find((c: SyntaxNode) => c.type === 'identifier');
+        if (methodId) return methodId.text;
+      }
+
+      return undefined;
+    }
+
+    // new MyWidget() — explicit constructor call
+    if (node.type === 'new_expression') {
+      const typeId = node.namedChildren.find((c: SyntaxNode) => c.type === 'type_identifier');
+      if (typeId) return typeId.text;
+      return undefined;
+    }
+
+    // const EdgeInsets.all(8.0) — const constructor call
+    if (node.type === 'const_object_expression') {
+      const typeId = node.namedChildren.find((c: SyntaxNode) => c.type === 'type_identifier');
+      const nameId = node.namedChildren.find((c: SyntaxNode) => c.type === 'identifier');
+      if (typeId && nameId) return typeId.text + '.' + nameId.text;
+      if (typeId) return typeId.text;
+      return undefined;
+    }
+
+    return undefined;
   },
 };
