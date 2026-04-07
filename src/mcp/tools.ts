@@ -21,11 +21,11 @@ const MAX_OUTPUT_LENGTH = 15000;
  * but smaller ones should use fewer to avoid unnecessary overhead.
  */
 export function getExploreBudget(fileCount: number): number {
-  if (fileCount < 1000) return 2;
-  if (fileCount < 5000) return 3;
-  if (fileCount < 15000) return 4;
-  if (fileCount < 25000) return 5;
-  return 6;
+  if (fileCount < 500) return 1;
+  if (fileCount < 5000) return 2;
+  if (fileCount < 15000) return 3;
+  if (fileCount < 25000) return 4;
+  return 5;
 }
 
 /**

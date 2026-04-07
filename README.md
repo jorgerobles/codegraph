@@ -393,8 +393,8 @@ The `.codegraph/config.json` file controls indexing:
 | Ruby | `.rb` | Full support |
 | C | `.c`, `.h` | Full support |
 | C++ | `.cpp`, `.hpp`, `.cc` | Full support |
-| Swift | `.swift` | Basic support |
-| Kotlin | `.kt`, `.kts` | Basic support |
+| Swift | `.swift` | Full support |
+| Kotlin | `.kt`, `.kts` | Full support |
 | Dart | `.dart` | Full support |
 | Svelte | `.svelte` | Full support (script extraction, Svelte 5 runes, SvelteKit routes) |
 | Liquid | `.liquid` | Full support |
