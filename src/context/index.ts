@@ -827,6 +827,66 @@ export class ContextBuilder {
       );
     }
 
+    // Per-file diversity cap: prevent any single file from monopolizing the
+    // node budget. When BFS traverses from a method, it follows `contains`
+    // to the parent class, then back down to all sibling methods. With
+    // multiple entry points in the same class, one file can consume 30-40%
+    // of maxNodes. Cap each file to ~20% to ensure cross-file diversity.
+    const maxPerFile = Math.max(5, Math.ceil(opts.maxNodes * 0.2));
+    const fileCounts = new Map<string, string[]>();
+    for (const [id, node] of finalNodes) {
+      const ids = fileCounts.get(node.filePath) || [];
+      ids.push(id);
+      fileCounts.set(node.filePath, ids);
+    }
+    const rootSet = new Set(roots);
+    for (const [, nodeIds] of fileCounts) {
+      if (nodeIds.length <= maxPerFile) continue;
+      // Sort: entry points first, then classes/interfaces, then others
+      const kindPriority: Record<string, number> = {
+        class: 3, interface: 3, struct: 3, trait: 3, protocol: 3, enum: 3,
+        method: 1, function: 1, property: 0, field: 0, variable: 0,
+      };
+      nodeIds.sort((a, b) => {
+        const aRoot = rootSet.has(a) ? 10 : 0;
+        const bRoot = rootSet.has(b) ? 10 : 0;
+        const aKind = kindPriority[finalNodes.get(a)!.kind] ?? 0;
+        const bKind = kindPriority[finalNodes.get(b)!.kind] ?? 0;
+        return (bRoot + bKind) - (aRoot + aKind);
+      });
+      // Remove excess nodes (keep the highest-priority ones)
+      for (const id of nodeIds.slice(maxPerFile)) {
+        finalNodes.delete(id);
+      }
+    }
+    // Non-production node cap: limit test/sample/integration/example files to
+    // at most 15% of the budget. Many codebases have dozens of near-identical
+    // test implementations (e.g., 6 Guard classes in integration tests) that
+    // individually survive score dampening but collectively flood the result.
+    // Test entry points are NOT exempt — they should be evicted too.
+    if (!isTestQuery) {
+      const maxNonProd = Math.max(3, Math.ceil(opts.maxNodes * 0.15));
+      const nonProdIds: string[] = [];
+      for (const [id, node] of finalNodes) {
+        if (isTestFile(node.filePath)) {
+          nonProdIds.push(id);
+        }
+      }
+      if (nonProdIds.length > maxNonProd) {
+        for (const id of nonProdIds.slice(maxNonProd)) {
+          finalNodes.delete(id);
+          // Also remove from roots — test file entry points shouldn't anchor results
+          const rootIdx = roots.indexOf(id);
+          if (rootIdx !== -1) roots.splice(rootIdx, 1);
+        }
+      }
+    }
+
+    // Re-filter edges after per-file and non-production caps
+    finalEdges = finalEdges.filter(
+      (e) => finalNodes.has(e.source) && finalNodes.has(e.target)
+    );
+
     // Edge recovery: BFS with many entry points leaves most nodes disconnected.
     // Discover edges between already-selected nodes to recover connectivity.
     const recoveryKinds: EdgeKind[] = ['calls', 'extends', 'implements', 'references', 'overrides'];

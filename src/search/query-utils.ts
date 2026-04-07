@@ -231,8 +231,29 @@ export function isTestFile(filePath: string): boolean {
     lower.includes('/__tests__/') ||
     lower.includes('/spec/') ||
     lower.includes('/testlib/') ||
-    lower.includes('/testing/')
+    lower.includes('/testing/') ||
+    // Non-production directories: examples, samples, benchmarks, fixtures, demos.
+    // Check both mid-path (/integration/) and start-of-path (integration/) since
+    // file paths may be stored as relative paths without a leading slash.
+    matchesNonProductionDir(lower)
   );
+}
+
+/**
+ * Check if a path is in a non-production directory (integration, sample, example, etc.)
+ * Handles both absolute paths (/foo/integration/bar) and relative paths (integration/bar).
+ */
+function matchesNonProductionDir(lowerPath: string): boolean {
+  const dirs = [
+    'integration', 'sample', 'samples', 'example', 'examples',
+    'fixture', 'fixtures', 'benchmark', 'benchmarks', 'demo', 'demos',
+  ];
+  for (const dir of dirs) {
+    if (lowerPath.includes('/' + dir + '/') || lowerPath.startsWith(dir + '/')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
