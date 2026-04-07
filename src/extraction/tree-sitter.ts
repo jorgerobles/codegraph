@@ -106,7 +106,7 @@ export class TreeSitterExtractor {
   constructor(filePath: string, source: string, language?: Language) {
     this.filePath = filePath;
     this.source = source;
-    this.language = language || detectLanguage(filePath);
+    this.language = language || detectLanguage(filePath, source);
     this.extractor = EXTRACTORS[this.language] || null;
   }
 
@@ -2087,7 +2087,7 @@ export function extractFromSource(
   source: string,
   language?: Language
 ): ExtractionResult {
-  const detectedLanguage = language || detectLanguage(filePath);
+  const detectedLanguage = language || detectLanguage(filePath, source);
   const fileExtension = path.extname(filePath).toLowerCase();
 
   // Use custom extractor for Svelte

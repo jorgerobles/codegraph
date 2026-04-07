@@ -472,6 +472,10 @@ export class ExtractionOrchestrator {
 
     // Detect needed languages and load grammars in the parse worker
     const neededLanguages = [...new Set(files.map((f) => detectLanguage(f)))];
+    // .h files default to 'c' but may be C++ — ensure cpp grammar is loaded when c is needed
+    if (neededLanguages.includes('c') && !neededLanguages.includes('cpp')) {
+      neededLanguages.push('cpp');
+    }
 
     // Try to use a worker thread for parsing (keeps main thread unblocked for UI).
     // Falls back to in-process parsing if the compiled worker is unavailable (e.g. tests).
@@ -580,7 +584,7 @@ export class ExtractionOrchestrator {
     async function requestParse(filePath: string, content: string): Promise<ExtractionResult> {
       if (!WorkerClass) {
         // In-process fallback
-        return extractFromSource(filePath, content, detectLanguage(filePath));
+        return extractFromSource(filePath, content, detectLanguage(filePath, content));
       }
 
       // Recycle the worker before the next parse if we've hit the threshold.
@@ -706,7 +710,7 @@ export class ExtractionOrchestrator {
 
         // Store in database on main thread (SQLite is not thread-safe)
         if (result.nodes.length > 0 || result.errors.length === 0) {
-          const language = detectLanguage(filePath);
+          const language = detectLanguage(filePath, content);
           this.storeExtractionResult(filePath, content, language, stats, result);
         }
 
@@ -779,7 +783,7 @@ export class ExtractionOrchestrator {
         }
 
         if (result.nodes.length > 0 || result.errors.length === 0) {
-          const language = detectLanguage(filePath);
+          const language = detectLanguage(filePath, content);
           const stats = await fsp.stat(path.join(this.rootDir, filePath));
           this.storeExtractionResult(filePath, content, language, stats, result);
 
@@ -830,7 +834,7 @@ export class ExtractionOrchestrator {
           }
 
           if (result.nodes.length > 0 || result.errors.length === 0) {
-            const language = detectLanguage(filePath);
+            const language = detectLanguage(filePath, fullContent);
             const stats = await fsp.stat(path.join(this.rootDir, filePath));
             this.storeExtractionResult(filePath, fullContent, language, stats, result);
 
@@ -989,7 +993,7 @@ export class ExtractionOrchestrator {
     }
 
     // Detect language
-    const language = detectLanguage(relativePath);
+    const language = detectLanguage(relativePath, content);
     if (!isLanguageSupported(language)) {
       return {
         nodes: [],
@@ -1201,6 +1205,10 @@ export class ExtractionOrchestrator {
     // Load only grammars needed for changed files
     if (filesToIndex.length > 0) {
       const neededLanguages = [...new Set(filesToIndex.map((f) => detectLanguage(f)))];
+      // .h files default to 'c' but may be C++ — ensure cpp grammar is loaded
+      if (neededLanguages.includes('c') && !neededLanguages.includes('cpp')) {
+        neededLanguages.push('cpp');
+      }
       await loadGrammarsForLanguages(neededLanguages);
     }
 

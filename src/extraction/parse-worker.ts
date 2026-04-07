@@ -20,7 +20,7 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
   } else if (msg.type === 'parse') {
     const { id, filePath, content } = msg;
     try {
-      const language = detectLanguage(filePath!);
+      const language = detectLanguage(filePath!, content);
       const result: ExtractionResult = extractFromSource(filePath!, content!, language);
 
       // Periodic parser reset to reclaim WASM heap memory
