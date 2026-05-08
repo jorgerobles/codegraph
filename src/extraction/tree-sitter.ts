@@ -23,6 +23,10 @@ import { LiquidExtractor } from './liquid-extractor';
 import { SvelteExtractor } from './svelte-extractor';
 import { DfmExtractor } from './dfm-extractor';
 import { VueExtractor } from './vue-extractor';
+import {
+  getAllFrameworkResolvers,
+  getApplicableFrameworks,
+} from '../resolution/frameworks';
 
 // Re-export for backward compatibility
 export { generateNodeId } from './tree-sitter-helpers';
@@ -2474,43 +2478,71 @@ export class TreeSitterExtractor {
 
 
 /**
- * Extract nodes and edges from source code
+ * Extract nodes and edges from source code.
+ *
+ * If `frameworkNames` is provided, framework-specific extractors matching
+ * those names and the file's language are run after the tree-sitter pass.
+ * Their nodes/references/errors are merged into the returned result.
  */
 export function extractFromSource(
   filePath: string,
   source: string,
-  language?: Language
+  language?: Language,
+  frameworkNames?: string[]
 ): ExtractionResult {
   const detectedLanguage = language || detectLanguage(filePath, source);
   const fileExtension = path.extname(filePath).toLowerCase();
 
+  let result: ExtractionResult;
+
   // Use custom extractor for Svelte
   if (detectedLanguage === 'svelte') {
     const extractor = new SvelteExtractor(filePath, source);
-    return extractor.extract();
-  }
-
-  // Use custom extractor for Vue
-  if (detectedLanguage === 'vue') {
+    result = extractor.extract();
+  } else if (detectedLanguage === 'vue') {
+    // Use custom extractor for Vue
     const extractor = new VueExtractor(filePath, source);
-    return extractor.extract();
-  }
-
-  // Use custom extractor for Liquid
-  if (detectedLanguage === 'liquid') {
+    result = extractor.extract();
+  } else if (detectedLanguage === 'liquid') {
+    // Use custom extractor for Liquid
     const extractor = new LiquidExtractor(filePath, source);
-    return extractor.extract();
-  }
-
-  // Use custom extractor for DFM/FMX form files
-  if (
+    result = extractor.extract();
+  } else if (
     detectedLanguage === 'pascal' &&
     (fileExtension === '.dfm' || fileExtension === '.fmx')
   ) {
+    // Use custom extractor for DFM/FMX form files
     const extractor = new DfmExtractor(filePath, source);
-    return extractor.extract();
+    result = extractor.extract();
+  } else {
+    const extractor = new TreeSitterExtractor(filePath, source, detectedLanguage);
+    result = extractor.extract();
   }
 
-  const extractor = new TreeSitterExtractor(filePath, source, detectedLanguage);
-  return extractor.extract();
+  // Framework-specific extraction (routes, middleware, etc.)
+  if (frameworkNames && frameworkNames.length > 0) {
+    const allResolvers = getAllFrameworkResolvers();
+    const applicable = getApplicableFrameworks(
+      allResolvers.filter((r) => frameworkNames.includes(r.name)),
+      detectedLanguage
+    );
+    for (const fw of applicable) {
+      if (!fw.extract) continue;
+      try {
+        const fwResult = fw.extract(filePath, source);
+        result.nodes.push(...fwResult.nodes);
+        result.unresolvedReferences.push(...fwResult.references);
+      } catch (err) {
+        result.errors.push({
+          message: `Framework extractor '${fw.name}' failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          filePath,
+          severity: 'warning',
+        });
+      }
+    }
+  }
+
+  return result;
 }

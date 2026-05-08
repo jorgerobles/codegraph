@@ -187,7 +187,7 @@ export const vueResolver: FrameworkResolver = {
     return null;
   },
 
-  extractNodes(filePath: string, _content: string): Node[] {
+  extract(filePath: string, _content: string) {
     const nodes: Node[] = [];
     const now = Date.now();
 
@@ -260,7 +260,7 @@ export const vueResolver: FrameworkResolver = {
       });
     }
 
-    return nodes;
+    return { nodes, references: [] };
   },
 };
 
