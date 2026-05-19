@@ -7,6 +7,24 @@ a [GitHub Release](https://github.com/colbymchenry/codegraph/releases) tagged
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.10] - 2026-05-19
+
+### Fixed
+- **MCP**: tools no longer silently fail to appear in clients on slow
+  filesystems (Docker Desktop VirtioFS on macOS, WSL2). The `initialize`
+  handshake was blocking on opening the SQLite database and bootstrapping
+  the tree-sitter WASM runtime, which on slow I/O could exceed Claude
+  Code's ~30s handshake timeout — leaving the codegraph process alive but
+  unresponsive and no tools visible. The handshake now returns immediately
+  and defers project open to the background; tool calls wait on the
+  in-flight init rather than racing it with a second open. Closes
+  [#172](https://github.com/colbymchenry/codegraph/issues/172). Thanks to
+  [@sashanclrp](https://github.com/sashanclrp) for the original report and
+  detailed reproduction, and [@sgrimm](https://github.com/sgrimm) for the
+  decisive wire capture that isolated the actual root cause.
+
+[0.7.10]: https://github.com/colbymchenry/codegraph/releases/tag/v0.7.10
+
 ## [0.7.8] - 2026-05-17
 
 ### Fixed

@@ -64,6 +64,9 @@ export class MCPServer {
   private cg: CodeGraph | null = null;
   private toolHandler: ToolHandler;
   private projectPath: string | null;
+  // In-flight background init kicked off from handleInitialize. Tracked so the
+  // sync retry path doesn't race against it (double-opening the SQLite file).
+  private initPromise: Promise<void> | null = null;
 
   constructor(projectPath?: string) {
     this.projectPath = projectPath || null;
@@ -130,8 +133,16 @@ export class MCPServer {
    * Called lazily on tool calls that need the default project.
    * Re-walks parent directories each time so it picks up projects
    * initialized after the MCP server started.
+   *
+   * Awaits any in-flight background init (kicked off by handleInitialize) so
+   * we never open the SQLite file twice concurrently.
    */
-  private retryInitIfNeeded(): void {
+  private async retryInitIfNeeded(): Promise<void> {
+    // Wait for the background init started during handleInitialize, if any.
+    if (this.initPromise) {
+      try { await this.initPromise; } catch { /* errored init falls through to retry */ }
+    }
+
     // Already initialized successfully
     if (this.toolHandler.hasDefaultCodeGraph()) return;
     // No project path to retry with
@@ -266,13 +277,17 @@ export class MCPServer {
       projectPath = process.cwd();
     }
 
-    // Try to initialize the default project (non-fatal if it fails)
-    await this.tryInitializeDefault(projectPath);
-
-    // We accept the client's protocol version but respond with our supported version.
-    // The `instructions` field is surfaced by MCP clients in the agent's system
-    // prompt automatically — it's the right place for the universal tool-selection
-    // playbook, ahead of individual tool descriptions.
+    // Respond to the handshake BEFORE doing any heavy initialization. Loading
+    // the SQLite DB and the tree-sitter WASM runtime can take many seconds on
+    // slow filesystems (Docker Desktop VirtioFS on macOS, WSL2). Clients like
+    // Claude Code time out the handshake at ~30s, which manifested as
+    // "MCP tools never appear" — the child was alive and had received the
+    // initialize but was still awaiting initGrammars(). See issue #172.
+    //
+    // We accept the client's protocol version but respond with our supported
+    // version. The `instructions` field is surfaced by MCP clients in the
+    // agent's system prompt automatically — it's the right place for the
+    // universal tool-selection playbook, ahead of individual tool descriptions.
     this.transport.sendResult(request.id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {
@@ -281,13 +296,21 @@ export class MCPServer {
       serverInfo: SERVER_INFO,
       instructions: SERVER_INSTRUCTIONS,
     });
+
+    // Kick off the default-project init in the background. Tool calls that
+    // arrive before it finishes will see the "not initialized yet" path and
+    // fall through to `retryInitIfNeeded`, which now waits for this promise
+    // rather than racing against it with a second open.
+    this.initPromise = this.tryInitializeDefault(projectPath).finally(() => {
+      this.initPromise = null;
+    });
   }
 
   /**
    * Handle tools/list request
    */
   private async handleToolsList(request: JsonRpcRequest): Promise<void> {
-    this.retryInitIfNeeded();
+    await this.retryInitIfNeeded();
     this.transport.sendResult(request.id, {
       tools: this.toolHandler.getTools(),
     });
@@ -327,7 +350,7 @@ export class MCPServer {
 
     // If the default project isn't initialized yet, retry in case it was
     // initialized after the MCP server started (e.g. user ran codegraph init)
-    this.retryInitIfNeeded();
+    await this.retryInitIfNeeded();
 
     const result = await this.toolHandler.execute(toolName, toolArgs);
 
