@@ -7,7 +7,7 @@ a [GitHub Release](https://github.com/colbymchenry/codegraph/releases) tagged
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-05-21
 
 ### 🎉 Self-contained: CodeGraph bundles its own runtime — install anywhere, on any Node (or none)
 
@@ -81,6 +81,8 @@ npm i -g @colbymchenry/codegraph
   on uninstall, so the npm `preuninstall` step fully reverses a legacy
   install. Re-run `codegraph install` once on an affected machine to
   clear the error.
+
+[0.9.0]: https://github.com/colbymchenry/codegraph/releases/tag/v0.9.0
 
 ## [0.8.0] - 2026-05-20
 
