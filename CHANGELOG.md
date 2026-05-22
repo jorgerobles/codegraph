@@ -9,6 +9,18 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.9.4] - 2026-05-22
 
+### Fixed
+- **Orphaned `codegraph serve --mcp` processes after a parent SIGKILL.** When
+  the MCP host (Claude Code, opencode, …) was force-killed — OOM killer, a
+  `kill -9`, a container teardown — the child kept running indefinitely on
+  Linux, holding inotify watches, file descriptors, and the SQLite WAL. The
+  kernel doesn't propagate parent death to children, and the stdin
+  `end`/`close` handlers we relied on don't always fire. The MCP server now
+  polls `process.ppid` and shuts down the moment it changes from the value
+  observed at startup; the poll interval is `CODEGRAPH_PPID_POLL_MS` (default
+  `5000`, `0` disables). Resolves
+  [#277](https://github.com/colbymchenry/codegraph/issues/277).
+
 ### Added
 - **Release archives now ship with a `SHA256SUMS` file**, and the npm launcher
   verifies the bundle it downloads against it — a mismatch aborts before
