@@ -422,3 +422,104 @@ class App_KernelContainer extends Container
     cg.close();
   });
 });
+
+describe('Symfony end-to-end — compiled container route extraction', () => {
+  let tmpDir: string | undefined;
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it('extracts routes from $routes->add() in compiled container', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-symfony-cont-routes-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'composer.json'),
+      JSON.stringify({ require: { 'symfony/framework-bundle': '^7.0' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, 'bin'));
+    fs.writeFileSync(path.join(tmpDir, 'bin/console'), '#!/usr/bin/env php\n<?php\n');
+    fs.mkdirSync(path.join(tmpDir, 'config'));
+    fs.writeFileSync(path.join(tmpDir, 'config/packages'), '');
+    fs.mkdirSync(path.join(tmpDir, 'var/cache/dev'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'var/cache/dev/App_KernelContainer.php'),
+      `<?php
+class App_KernelContainer extends Container
+{
+    protected function getRouterService(): Router
+    {
+        \\$routes = new RouteCollection();
+        \\$routes->add('blog_index', new Route('/', ['_controller' => 'App\\\\Controller\\\\BlogController::index'], [], [], '', ['GET'], []));
+        \\$routes->add('blog_show', new Route('/blog/{slug}', ['_controller' => 'App\\\\Controller\\\\BlogController::show'], ['slug' => '[a-z]+'], [], '', ['GET'], []));
+        return new Router(\\$routes);
+    }
+
+    protected function getLoggerService(): \\Monolog\\Logger
+    {
+        return \\$this->privates['logger'] ?? \\$this->load('getLoggerService');
+    }
+}
+`
+    );
+
+    const cg = CodeGraph.initSync(tmpDir);
+    await cg.indexAll();
+
+    const routes = cg.getNodesByKind('route');
+    const blogIndex = routes.find(r => r.name === 'GET /');
+    expect(blogIndex).toBeDefined();
+    expect(blogIndex!.qualifiedName).toContain('blog_index');
+
+    const blogShow = routes.find(r => r.name === 'GET /blog/{slug}');
+    expect(blogShow).toBeDefined();
+    expect(blogShow!.qualifiedName).toContain('blog_show');
+
+    // Controller references are stored as unresolved refs in extraction;
+    // they only become edges when the target node exists in the graph
+    // (no controller file in this test, so no edge — that's correct)
+
+    // Service extraction should still work
+    const services = cg.getNodesByKind('variable');
+    const loggerSvc = services.find(s => s.name === 'Logger');
+    expect(loggerSvc).toBeDefined();
+
+    cg.close();
+  });
+
+  it('extracts routes with PHP short array syntax from compiled container', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-symfony-cont-arr-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'composer.json'),
+      JSON.stringify({ require: { 'symfony/framework-bundle': '^7.0' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, 'bin'));
+    fs.writeFileSync(path.join(tmpDir, 'bin/console'), '#!/usr/bin/env php\n<?php\n');
+    fs.mkdirSync(path.join(tmpDir, 'config'));
+    fs.writeFileSync(path.join(tmpDir, 'config/packages'), '');
+    fs.mkdirSync(path.join(tmpDir, 'var/cache/dev'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'var/cache/dev/App_KernelContainer.php'),
+      `<?php
+class App_KernelContainer extends Container
+{
+    protected function getRouterService(): Router
+    {
+        \\$routes = new RouteCollection();
+        \\$routes->add('api_entries', new Route('/api/entries', ['_controller' => 'App\\\\Controller\\\\ApiController::list'], [], [], '', ['GET', 'POST'], []));
+        return new Router(\\$routes);
+    }
+}
+`
+    );
+
+    const cg = CodeGraph.initSync(tmpDir);
+    await cg.indexAll();
+
+    const routes = cg.getNodesByKind('route');
+    expect(routes).toHaveLength(2);
+    expect(routes.map(r => r.name)).toContain('GET /api/entries');
+    expect(routes.map(r => r.name)).toContain('POST /api/entries');
+
+    cg.close();
+  });
+});

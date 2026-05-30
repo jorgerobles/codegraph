@@ -14,6 +14,9 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `codegraph init` now builds the initial index by default — you no longer need the `-i`/`--index` flag (it's still accepted, so existing commands and scripts keep working). (#483)
 - Go: Gin middleware chains now connect end-to-end in `codegraph_trace` and `codegraph_explore` — following a request reaches the middleware and route handlers registered via `.Use()` / `.GET()` instead of dead-ending where the framework dispatches the chain dynamically.
 - `codegraph_explore` now sizes its response to the *answer* instead of the file count: it shows the mechanism and the exact methods you asked about in full — even when they're buried deep in a large file — while collapsing the redundant interchangeable implementations of an interface (an HTTP interceptor chain, a query-compiler family) down to signatures. Fewer tokens for a more complete answer, so on the flows that used to occasionally cost more than plain grep/read it's now clearly cheaper — and the win holds across small, medium, and large codebases. Distinct, non-interchangeable code is shown in full as before. Disable with `CODEGRAPH_ADAPTIVE_EXPLORE=0`.
+- Symfony: compiled DI containers now have routes extracted from `$routes->add(...)` calls using tree-sitter AST — route paths, names, controller references, and HTTP methods captured from the compiled router cache.
+- Symfony: `methods:` on `#[Route]` now handles PHP constant references like `[Request::METHOD_GET]` (extracts `GET` from the constant name).
+- Symfony: `defaults:` and `requirements:` on `#[Route]` now handle PHP short array syntax (`['key' => 'val']`) alongside the existing `{key: val}` dict syntax.
 
 ### Fixes
 

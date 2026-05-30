@@ -1684,6 +1684,32 @@ class DefaultController {
     const { nodes } = symfonyResolver.extract!('src/Controller/DefaultController.php', src);
     expect(nodes[0].name).toBe('ANY /');
   });
+
+  it('handles methods: with PHP constant refs like Request::METHOD_GET', () => {
+    const src = `<?php
+#[Route('/api')]
+class ApiController {
+    #[Route('/entries', name: 'api_entries', methods: [Request::METHOD_GET])]
+    public function list(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/ApiController.php', src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe('GET /api/entries');
+  });
+
+  it('handles mixed methods: with strings and PHP constants', () => {
+    const src = `<?php
+#[Route('/api')]
+class MixedController {
+    #[Route('/items/{id}', name: 'api_item', methods: ['GET', Request::METHOD_HEAD])]
+    public function item(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/MixedController.php', src);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map(n => n.name)).toEqual(['GET /api/items/{id}', 'HEAD /api/items/{id}']);
+  });
 });
 
 describe('symfonyResolver.detect', () => {
@@ -2017,6 +2043,49 @@ class BlogController {
 `;
     const { nodes } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
     expect(nodes[0].signature).toBeUndefined();
+  });
+
+  it('extracts defaults from PHP short array syntax [key => val]', () => {
+    const src = `<?php
+class LocaleController {
+    #[Route('/{locale}/app', name: 'locale_app', defaults: ['locale' => 'en'])]
+    public function app(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/LocaleController.php', src);
+    const sig = nodes[0]?.signature;
+    expect(sig).toBeDefined();
+    const meta = JSON.parse(sig);
+    expect(meta.defaults).toEqual({ locale: 'en' });
+  });
+
+  it('extracts requirements from PHP short array syntax [key => val]', () => {
+    const src = `<?php
+class SlugController {
+    #[Route('/{slug}', name: 'slug_show', requirements: ['slug' => '[a-z]+'])]
+    public function show(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/SlugController.php', src);
+    const sig = nodes[0]?.signature;
+    expect(sig).toBeDefined();
+    const meta = JSON.parse(sig);
+    expect(meta.requirements).toEqual({ slug: '[a-z]+' });
+  });
+
+  it('extracts defaults and requirements from mixed {}/[] syntax together', () => {
+    const src = `<?php
+class MixedController {
+    #[Route('/{locale}/{slug}', name: 'mixed', defaults: { locale: 'en' }, requirements: ['slug' => '[a-z]+'])]
+    public function app(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/MixedController.php', src);
+    const sig = nodes[0]?.signature;
+    expect(sig).toBeDefined();
+    const meta = JSON.parse(sig);
+    expect(meta.defaults).toEqual({ locale: 'en' });
+    expect(meta.requirements).toEqual({ slug: '[a-z]+' });
   });
 });
 

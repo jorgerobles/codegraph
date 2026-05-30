@@ -9,6 +9,7 @@ import { extractDoctrineEntities, extractDoctrineRepositories } from './doctrine
 import { extractEventSubscribers } from './events';
 import { extractConsoleCommands } from './commands';
 import { extractTwigReferences } from './twig';
+import { extractContainerRoutes } from './container-routes';
 
 export const symfonyResolver: FrameworkResolver = {
   name: 'symfony',
@@ -168,6 +169,11 @@ export const symfonyResolver: FrameworkResolver = {
             language: 'php',
           });
         }
+
+        // Compiled route definitions from container (tree-sitter AST)
+        const containerRoutes = extractContainerRoutes(filePath, content, now);
+        nodes.push(...containerRoutes.nodes);
+        references.push(...containerRoutes.references);
       }
 
       // ── Doctrine entities & repositories ──────────────────────────────

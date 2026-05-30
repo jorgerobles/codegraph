@@ -9,6 +9,9 @@ export function extractYamlRoutes(
   const nodes: Node[] = [];
   const references: UnresolvedRef[] = [];
 
+  // Skip YAML files without route- or service-specific keywords
+  if (!/^[\t ]*(?:controller|resource|services):/m.test(content)) return { nodes, references };
+
   const lines = content.split('\n');
   let currentRoute: { name: string; lineNum: number } | null = null;
   let currentPathVal: string | null = null;
