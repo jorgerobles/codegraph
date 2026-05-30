@@ -1891,7 +1891,8 @@ export class TreeSitterExtractor {
       if (
         n.type !== 'decorator' &&
         n.type !== 'annotation' &&
-        n.type !== 'marker_annotation'
+        n.type !== 'marker_annotation' &&
+        n.type !== 'attribute'
       ) {
         return;
       }
@@ -1910,7 +1911,8 @@ export class TreeSitterExtractor {
           child.type === 'identifier' ||
           child.type === 'member_expression' ||
           child.type === 'scoped_identifier' ||
-          child.type === 'navigation_expression'
+          child.type === 'navigation_expression' ||
+          child.type === 'name'
         ) {
           target = child;
           break;
@@ -1933,7 +1935,16 @@ export class TreeSitterExtractor {
     // 1. Decorators that are direct children of the declaration
     //    (method/property style, also some grammars for class).
     for (let i = 0; i < declNode.namedChildCount; i++) {
-      consider(declNode.namedChild(i));
+      const child = declNode.namedChild(i);
+      if (!child) continue;
+      // PHP wraps `attribute` nodes inside `attribute_declaration` containers
+      if (child.type === 'attribute_declaration') {
+        for (let j = 0; j < child.namedChildCount; j++) {
+          consider(child.namedChild(j));
+        }
+      } else {
+        consider(child);
+      }
     }
 
     // 2. Decorators that are PRECEDING siblings of the declaration
@@ -1963,10 +1974,17 @@ export class TreeSitterExtractor {
         for (let j = declIdx - 1; j >= 0; j--) {
           const sibling = parent.namedChild(j);
           if (!sibling) continue;
-          if (sibling.type !== 'decorator' && sibling.type !== 'annotation' && sibling.type !== 'marker_annotation') {
+          if (sibling.type !== 'decorator' && sibling.type !== 'annotation' && sibling.type !== 'marker_annotation' && sibling.type !== 'attribute' && sibling.type !== 'attribute_declaration') {
             break; // non-decorator separator → stop consuming
           }
-          consider(sibling);
+          // PHP wraps `attribute` nodes inside `attribute_declaration`
+          if (sibling.type === 'attribute_declaration') {
+            for (let k = 0; k < sibling.namedChildCount; k++) {
+              consider(sibling.namedChild(k));
+            }
+          } else {
+            consider(sibling);
+          }
         }
       }
     }

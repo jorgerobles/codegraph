@@ -1597,3 +1597,334 @@ export class UsersController {
     expect(references.map((r) => r.referenceName)).toEqual(['real']);
   });
 });
+
+import { symfonyResolver } from '../src/resolution/frameworks/symfony';
+
+describe('symfonyResolver.extract — PHP 8 attributes', () => {
+  it('extracts route from #[Route] attribute with path and method', () => {
+    const src = `<?php
+#[Route('/blog')]
+class BlogController {
+    #[Route('/', name: 'blog_index', methods: ['GET'])]
+    public function index(): Response {
+        return \$this->render('blog/index.html.twig');
+    }
+}
+`;
+    const { nodes, references } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].kind).toBe('route');
+    expect(nodes[0].name).toBe('GET /blog/');
+    expect(references[0].referenceName).toBe('index');
+    expect(references[0].referenceKind).toBe('references');
+    expect(references[0].fromNodeId).toBe(nodes[0].id);
+  });
+
+  it('joins class-level #[Route] prefix with method path', () => {
+    const src = `<?php
+#[Route('/admin/post')]
+class BlogController {
+    #[Route('/', name: 'admin_index', methods: ['GET'])]
+    public function index(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/Admin/BlogController.php', src);
+    expect(nodes[0].name).toBe('GET /admin/post/');
+  });
+
+  it('extracts multiple routes per controller with distinct paths', () => {
+    const src = `<?php
+#[Route('/blog')]
+class BlogController {
+    #[Route('/{slug}', name: 'blog_post', methods: ['GET'])]
+    public function postShow(): Response {}
+
+    #[Route('/search', name: 'blog_search', methods: ['GET'])]
+    public function search(): Response {}
+}
+`;
+    const { nodes, references } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map(n => n.name)).toEqual(['GET /blog/{slug}', 'GET /blog/search']);
+    expect(references.map(r => r.referenceName)).toEqual(['postShow', 'search']);
+  });
+
+  it('defaults method to ANY when no methods attribute specified', () => {
+    const src = `<?php
+#[Route('/login')]
+class SecurityController {
+    #[Route('/login', name: 'security_login')]
+    public function login(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/SecurityController.php', src);
+    expect(nodes[0].name).toBe('ANY /login/login');
+  });
+
+  it('handles multiple HTTP methods', () => {
+    const src = `<?php
+#[Route('/admin/post')]
+class BlogController {
+    #[Route('/new', name: 'admin_post_new', methods: ['GET', 'POST'])]
+    public function new(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/Admin/BlogController.php', src);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map(n => n.name)).toEqual(['GET /admin/post/new', 'POST /admin/post/new']);
+  });
+
+  it('extracts with no class-level prefix (bare #[Route] on methods)', () => {
+    const src = `<?php
+class DefaultController {
+    #[Route('/', name: 'homepage')]
+    public function index(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/DefaultController.php', src);
+    expect(nodes[0].name).toBe('ANY /');
+  });
+});
+
+describe('symfonyResolver.detect', () => {
+  const baseContext = {
+    getNodesInFile: () => [],
+    getNodesByName: () => [],
+    getNodesByQualifiedName: () => [],
+    getNodesByKind: () => [],
+    fileExists: () => false,
+    readFile: () => null,
+    getProjectRoot: () => '/test',
+    getAllFiles: () => [],
+    getNodesByLowerName: () => [],
+    getImportMappings: () => [],
+  };
+
+  it('detects symfony/framework-bundle in composer.json require', () => {
+    const context = {
+      ...baseContext,
+      readFile: (p: string) =>
+        p === 'composer.json'
+          ? JSON.stringify({ require: { 'symfony/framework-bundle': '^7.0' } })
+          : null,
+    };
+    expect(symfonyResolver.detect(context as any)).toBe(true);
+  });
+
+  it('detects symfony/symfony in composer.json require-dev', () => {
+    const context = {
+      ...baseContext,
+      readFile: (p: string) =>
+        p === 'composer.json'
+          ? JSON.stringify({ 'require-dev': { 'symfony/symfony': '^5.4' } })
+          : null,
+    };
+    expect(symfonyResolver.detect(context as any)).toBe(true);
+  });
+
+  it('detects by bin/console + config/ fallback', () => {
+    const context = {
+      ...baseContext,
+      fileExists: (p: string) => p === 'bin/console' || p === 'config/',
+    };
+    expect(symfonyResolver.detect(context as any)).toBe(true);
+  });
+
+  it('returns false for non-Symfony project', () => {
+    const context = {
+      ...baseContext,
+      readFile: (p: string) =>
+        p === 'composer.json'
+          ? JSON.stringify({ require: { 'laravel/framework': '^10.0' } })
+          : null,
+    };
+    expect(symfonyResolver.detect(context as any)).toBe(false);
+  });
+});
+
+describe('symfonyResolver.resolve', () => {
+  const baseContext = {
+    getNodesInFile: () => [],
+    getNodesByName: () => [],
+    getNodesByQualifiedName: () => [],
+    getNodesByKind: () => [],
+    fileExists: () => false,
+    readFile: () => null,
+    getProjectRoot: () => '/test',
+    getAllFiles: () => [],
+    getNodesByLowerName: () => [],
+    getImportMappings: () => [],
+  };
+
+  it('resolves Controller::method reference', () => {
+    const classNode: Node = {
+      id: 'class:src/Controller/BlogController.php:10:BlogController:50',
+      kind: 'class',
+      name: 'BlogController',
+      qualifiedName: 'src/Controller/BlogController.php::BlogController',
+      filePath: 'src/Controller/BlogController.php',
+      language: 'php',
+      startLine: 10,
+      endLine: 60,
+      startColumn: 0,
+      endColumn: 0,
+      updatedAt: Date.now(),
+    };
+    const methodNode: Node = {
+      id: 'method:src/Controller/BlogController.php:50:index:50',
+      kind: 'method',
+      name: 'index',
+      qualifiedName: 'src/Controller/BlogController.php::index',
+      filePath: 'src/Controller/BlogController.php',
+      language: 'php',
+      startLine: 50,
+      endLine: 50,
+      startColumn: 0,
+      endColumn: 0,
+      updatedAt: Date.now(),
+    };
+    const context = {
+      ...baseContext,
+      fileExists: (p: string) => p === 'src/Controller/BlogController.php',
+      getNodesInFile: (p: string) => p === 'src/Controller/BlogController.php' ? [methodNode] : [],
+      getNodesByName: () => [],
+      getNodesByKind: (k: string) => k === 'class' ? [classNode] : [],
+    };
+    const ref = {
+      fromNodeId: 'route:config/routes.yaml:15:GET:/blog',
+      referenceName: 'App\\Controller\\BlogController::index',
+      referenceKind: 'references' as const,
+      line: 15,
+      column: 0,
+      filePath: 'config/routes.yaml',
+      language: 'yaml' as const,
+    };
+    const result = symfonyResolver.resolve(ref, context as any);
+    expect(result?.targetNodeId).toBe(methodNode.id);
+    expect(result?.confidence).toBeGreaterThanOrEqual(0.8);
+    expect(result?.resolvedBy).toBe('framework');
+  });
+
+  it('returns null for unresolvable reference', () => {
+    const ref = {
+      fromNodeId: 'x',
+      referenceName: 'SomeNonExistentClass::method',
+      referenceKind: 'references' as const,
+      line: 1,
+      column: 1,
+      filePath: 'a.yaml',
+      language: 'yaml' as const,
+    };
+    expect(symfonyResolver.resolve(ref, baseContext as any)).toBeNull();
+  });
+});
+
+describe('symfonyResolver.extract — YAML routes', () => {
+  it('extracts route from YAML config with controller reference', () => {
+    const src = `homepage:
+    path: /
+    controller: Symfony\\Bundle\\FrameworkBundle\\Controller\\TemplateController::templateAction
+    defaults:
+        template: default/homepage.html.twig
+`;
+    const { nodes, references } = symfonyResolver.extract!('config/routes.yaml', src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe('ANY /');
+    expect(references[0].referenceName).toBe('Symfony\\Bundle\\FrameworkBundle\\Controller\\TemplateController::templateAction');
+  });
+
+  it('extracts YAML route with methods specified', () => {
+    const src = `api_index:
+    path: /api
+    controller: App\\Controller\\ApiController::index
+    methods: [GET, POST]
+`;
+    const { nodes, references } = symfonyResolver.extract!('config/routes/api.yaml', src);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map(n => n.name)).toEqual(['GET /api', 'POST /api']);
+    expect(references[0].referenceName).toBe('App\\Controller\\ApiController::index');
+  });
+
+  it('returns empty for non-route YAML files', () => {
+    const src = `framework:
+    secret: '%env(APP_SECRET)%'
+    test: true
+`;
+    const { nodes, references } = symfonyResolver.extract!('config/packages/framework.yaml', src);
+    expect(nodes).toEqual([]);
+    expect(references).toEqual([]);
+  });
+});
+
+describe('symfonyResolver — comment stripping regression', () => {
+  it('skips commented-out #[Route] attributes', () => {
+    const src = `<?php
+class TestController {
+    // #[Route('/fake', name: 'fake')]
+    // public function fake(): Response {}
+
+    /* #[Route('/also-fake')]
+    public function alsoFake(): Response {} */
+
+    #[Route('/real', name: 'real', methods: ['GET'])]
+    public function real(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/TestController.php', src);
+    expect(nodes.map(n => n.name)).toEqual(['GET /real']);
+  });
+
+  it('skips commented-out YAML routes', () => {
+    const src = `# fake_route:
+    #     path: /fake
+    #     controller: App\\Controller\\FakeController::index
+
+real_route:
+    path: /real
+    controller: App\\Controller\\RealController::index
+`;
+    const { nodes } = symfonyResolver.extract!('config/routes.yaml', src);
+    expect(nodes.map(n => n.name)).toEqual(['ANY /real']);
+  });
+});
+
+describe('symfonyResolver — DI container', () => {
+  it('extracts services from compiled container PHP', () => {
+    const src = `<?php
+class Container_XYZ extends Container
+{
+    protected function getDoctrineService(): \\Doctrine\\ORM\\EntityManager
+    {
+        return \$this->privates['doctrine'] ?? \$this->load('getDoctrineService');
+    }
+
+    protected function getBlogRepositoryService(): \\App\\Repository\\BlogRepository
+    {
+        return new \\App\\Repository\\BlogRepository(\$this->getDoctrineService());
+    }
+}
+`;
+    const { nodes, references } = symfonyResolver.extract!('var/cache/dev/Container_XYZ.php', src);
+    const svcNames = nodes.filter(n => n.kind === 'variable').map(n => n.name);
+    expect(svcNames).toContain('Doctrine');
+    expect(svcNames).toContain('BlogRepository');
+    const fqcns = references.map(r => r.referenceName);
+    expect(fqcns).toContain('\\Doctrine\\ORM\\EntityManager');
+    expect(fqcns).toContain('\\App\\Repository\\BlogRepository');
+  });
+
+  it('extracts service references from config/services.yaml', () => {
+    const src = `services:
+    App\\Repository\\PostRepository:
+        arguments:
+            - '@doctrine'
+
+    App\\Service\\MailerService:
+        autowire: true
+`;
+    const { references } = symfonyResolver.extract!('config/services.yaml', src);
+    const fqcns = references.map(r => r.referenceName);
+    expect(fqcns).toContain('App\\Repository\\PostRepository');
+    expect(fqcns).toContain('App\\Service\\MailerService');
+  });
+});
