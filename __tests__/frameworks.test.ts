@@ -1928,3 +1928,318 @@ class Container_XYZ extends Container
     expect(fqcns).toContain('App\\Service\\MailerService');
   });
 });
+
+describe('symfonyResolver.extract — Phase 2.6 attribute params', () => {
+  function parseMeta(nodes: any[]): Record<string, unknown> | null {
+    const sig = nodes[0]?.signature;
+    return sig ? JSON.parse(sig) : null;
+  }
+
+  it('extracts defaults from #[Route] and stores as signature', () => {
+    const src = `<?php
+#[Route('/blog')]
+class BlogController {
+    #[Route('/{page}', name: 'blog_page', defaults: { page: 1 })]
+    public function page(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    const meta = parseMeta(nodes);
+    expect(meta).not.toBeNull();
+    expect(meta!.defaults).toEqual({ page: '1' });
+  });
+
+  it('extracts requirements from #[Route] and stores as signature', () => {
+    const src = `<?php
+#[Route('/blog')]
+class BlogController {
+    #[Route('/{slug}', name: 'blog_show', requirements: { slug: '[a-z]+' })]
+    public function show(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    const meta = parseMeta(nodes);
+    expect(meta).not.toBeNull();
+    expect(meta!.requirements).toEqual({ slug: '[a-z]+' });
+  });
+
+  it('extracts host from #[Route] and stores as signature', () => {
+    const src = `<?php
+#[Route('/admin')]
+class AdminController {
+    #[Route('/dashboard', name: 'admin_dash', host: 'admin.example.com')]
+    public function dashboard(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/AdminController.php', src);
+    const meta = parseMeta(nodes);
+    expect(meta).not.toBeNull();
+    expect(meta!.host).toBe('admin.example.com');
+  });
+
+  it('extracts schemes from #[Route] and stores as signature', () => {
+    const src = `<?php
+#[Route('/api')]
+class ApiController {
+    #[Route('/secure', name: 'api_secure', schemes: ['HTTPS'])]
+    public function secure(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/ApiController.php', src);
+    const meta = parseMeta(nodes);
+    expect(meta).not.toBeNull();
+    expect(meta!.schemes).toEqual(['HTTPS']);
+  });
+
+  it('extracts all extra params together', () => {
+    const src = `<?php
+class LocaleController {
+    #[Route('/{locale}/app', name: 'locale_app', defaults: { locale: 'en' }, requirements: { locale: 'en|fr|de' }, host: 'example.com', schemes: ['HTTPS'])]
+    public function app(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/LocaleController.php', src);
+    const meta = parseMeta(nodes);
+    expect(meta).not.toBeNull();
+    expect(meta!.defaults).toEqual({ locale: 'en' });
+    expect(meta!.requirements).toEqual({ locale: 'en|fr|de' });
+    expect(meta!.host).toBe('example.com');
+    expect(meta!.schemes).toEqual(['HTTPS']);
+  });
+
+  it('leaves signature empty when no extra params are present', () => {
+    const src = `<?php
+#[Route('/blog')]
+class BlogController {
+    #[Route('/', name: 'blog_index', methods: ['GET'])]
+    public function index(): Response {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    expect(nodes[0].signature).toBeUndefined();
+  });
+});
+
+describe('symfonyResolver.extract — broader container path', () => {
+  it('detects compiled container in var/cache path', () => {
+    const src = `<?php
+class Container_XYZ extends Container
+{
+    protected function getLoggerService(): \\Monolog\\Logger
+    {
+        return \$this->privates['logger'] ?? \$this->load('getLoggerService');
+    }
+}
+`;
+    const { nodes } = symfonyResolver.extract!('var/cache/dev/Container_XYZ.php', src);
+    expect(nodes.filter(n => n.kind === 'variable').map(n => n.name)).toContain('Logger');
+  });
+
+  it('detects compiled container in .symfony cache path', () => {
+    const src = `<?php
+class App_KernelContainer extends Container
+{
+    protected function getCacheService(): \\Symfony\\Component\\Cache\\Adapter\\AdapterInterface
+    {
+        return \$this->privates['cache'] ?? \$this->load('getCacheService');
+    }
+}
+`;
+    const { nodes } = symfonyResolver.extract!('.symfony/cache/App_KernelContainer.php', src);
+    expect(nodes.filter(n => n.kind === 'variable').map(n => n.name)).toContain('Cache');
+  });
+
+  it('detects compiled container in custom cache path with Container in filename', () => {
+    const src = `<?php
+class ContainerXYZ extends Container
+{
+    protected function getMailerService(): \\App\\Service\\MailerService
+    {
+        return new \\App\\Service\\MailerService();
+    }
+}
+`;
+    const { nodes } = symfonyResolver.extract!('cache/ContainerXYZ.php', src);
+    expect(nodes.filter(n => n.kind === 'variable').map(n => n.name)).toContain('Mailer');
+  });
+});
+
+describe('symfonyResolver.extract — YAML prefix detection', () => {
+  it('detects prefix from resource import (prefix not applied to sibling routes)', () => {
+    const src = `app_controllers:
+    resource: ../src/Controller/
+    type: attribute
+    prefix: /app
+
+app_index:
+    path: /
+    controller: App\\Controller\\DefaultController::index
+`;
+    const { nodes } = symfonyResolver.extract!('config/routes.yaml', src);
+    // prefix on a resource import does NOT apply to sibling routes
+    // prefix would be applied via postExtract to routes from the imported resource
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe('ANY /');
+  });
+
+  it('prefixed route with resource is not emitted (no path)', () => {
+    const src = `admin_pages:
+    resource: ../src/Admin/
+    prefix: /admin
+
+admin_dashboard:
+    path: /dashboard
+    controller: App\\Controller\\Admin\\DashboardController::index
+`;
+    const { nodes } = symfonyResolver.extract!('config/routes/admin.yaml', src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe('ANY /dashboard');
+  });
+});
+
+describe('symfonyResolver.extract — bundle service YAML', () => {
+  it('extracts service references from vendor bundle services.yaml', () => {
+    const src = `services:
+    Acme\\BlogBundle\\Controller\\PostController:
+        tags: ['controller.service_arguments']
+
+    Acme\\BlogBundle\\Repository\\PostRepository:
+        arguments:
+            - '@doctrine'
+`;
+    const { references } = symfonyResolver.extract!('vendor/acme/blog-bundle/Resources/config/services.yaml', src);
+    const fqcns = references.map(r => r.referenceName);
+    expect(fqcns).toContain('Acme\\BlogBundle\\Controller\\PostController');
+    expect(fqcns).toContain('Acme\\BlogBundle\\Repository\\PostRepository');
+  });
+});
+
+describe('symfonyResolver.extract — Doctrine entities', () => {
+  it('extracts entity from #[Entity] attribute', () => {
+    const src = `<?php
+#[Entity]
+class BlogPost
+{
+    #[Id, Column(type: 'integer'), GeneratedValue]
+    private int \$id;
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Entity/BlogPost.php', src);
+    const entity = nodes.find(n => n.id?.startsWith('entity:'));
+    expect(entity).toBeDefined();
+    expect(entity!.kind).toBe('class');
+    expect(entity!.name).toBe('BlogPost');
+  });
+
+  it('extracts entity from #[ORM\\\\Entity] attribute', () => {
+    const src = `<?php
+#[ORM\\Entity]
+class Category
+{
+    #[ORM\\Id, ORM\\Column(type: 'integer'), ORM\\GeneratedValue]
+    private int \$id;
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Entity/Category.php', src);
+    const entity = nodes.find(n => n.id?.startsWith('entity:'));
+    expect(entity).toBeDefined();
+    expect(entity!.name).toBe('Category');
+  });
+});
+
+describe('symfonyResolver.extract — Doctrine repositories', () => {
+  it('extracts repository extending ServiceEntityRepository', () => {
+    const src = `<?php
+class BlogPostRepository extends ServiceEntityRepository
+{
+    public function __construct(ManagerRegistry \$registry)
+    {
+        parent::__construct(\$registry, BlogPost::class);
+    }
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Repository/BlogPostRepository.php', src);
+    const repo = nodes.find(n => n.id?.startsWith('repository:'));
+    expect(repo).toBeDefined();
+    expect(repo!.name).toBe('BlogPostRepository');
+  });
+});
+
+describe('symfonyResolver.extract — event subscribers', () => {
+  it('extracts class implementing EventSubscriberInterface', () => {
+    const src = `<?php
+class ExceptionSubscriber implements EventSubscriberInterface
+{
+    public static function getSubscribedEvents()
+    {
+        return [KernelEvents::EXCEPTION => 'onKernelException'];
+    }
+
+    public function onKernelException(ExceptionEvent \$event): void {}
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/EventSubscriber/ExceptionSubscriber.php', src);
+    const sub = nodes.find(n => n.id?.startsWith('event_subscriber:'));
+    expect(sub).toBeDefined();
+    expect(sub!.name).toBe('ExceptionSubscriber');
+  });
+});
+
+describe('symfonyResolver.extract — console commands', () => {
+  it('extracts command with #[AsCommand] attribute', () => {
+    const src = `<?php
+#[AsCommand(name: 'app:generate-report')]
+class GenerateReportCommand extends Command
+{
+    protected function execute(InputInterface \$input, OutputInterface \$output): int
+    {
+        return Command::SUCCESS;
+    }
+}
+`;
+    const { nodes } = symfonyResolver.extract!('src/Command/GenerateReportCommand.php', src);
+    const cmd = nodes.find(n => n.id?.startsWith('console_command:'));
+    expect(cmd).toBeDefined();
+    expect(cmd!.name).toBe('GenerateReportCommand');
+  });
+});
+
+describe('symfonyResolver.extract — Twig template references', () => {
+  it('extracts Twig template reference from $this->render()', () => {
+    const src = `<?php
+class BlogController extends AbstractController
+{
+    #[Route('/', name: 'blog_index', methods: ['GET'])]
+    public function index(): Response
+    {
+        return \$this->render('blog/index.html.twig');
+    }
+}
+`;
+    const { references } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    const twigRef = references.find(r => r.referenceName === 'blog/index.html.twig');
+    expect(twigRef).toBeDefined();
+    expect(twigRef!.referenceKind).toBe('references');
+  });
+
+  it('extracts multiple Twig template references', () => {
+    const src = `<?php
+class BlogController extends AbstractController
+{
+    public function index(): Response
+    {
+        return \$this->render('blog/index.html.twig');
+    }
+
+    public function show(): Response
+    {
+        return \$this->render('blog/show.html.twig');
+    }
+}
+`;
+    const { references } = symfonyResolver.extract!('src/Controller/BlogController.php', src);
+    const templates = references.filter(r => r.referenceName.endsWith('.twig')).map(r => r.referenceName);
+    expect(templates).toContain('blog/index.html.twig');
+    expect(templates).toContain('blog/show.html.twig');
+  });
+});
